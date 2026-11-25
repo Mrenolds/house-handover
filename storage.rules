@@ -1,0 +1,31 @@
+rules_version = '2';
+
+// Replace OWNER_EMAIL below with the same email as in firestore.rules.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isOwner() {
+      return request.auth != null
+        && request.auth.token.email == 'PASTE_OWNER_EMAIL@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    function isBuilder() {
+      let s = /databases/(default)/documents/sessions/$(request.auth.uid);
+      return request.auth != null
+        && firestore.exists(s)
+        && firestore.get(/databases/(default)/documents/codes/$(firestore.get(s).data.codeHash)).data.revoked == false
+        && firestore.get(/databases/(default)/documents/codes/$(firestore.get(s).data.codeHash)).data.expiresAt > request.time;
+    }
+
+    // photos/<submission id>/<uid>_<photo id>.jpg
+    match /photos/{sid}/{file} {
+      allow read: if isOwner();
+      allow create: if isBuilder()
+        && file.matches(request.auth.uid + '_.*[.]jpg')
+        && request.resource.size < 3 * 1024 * 1024
+        && request.resource.contentType == 'image/jpeg';
+      allow update, delete: if false;
+    }
+  }
+}

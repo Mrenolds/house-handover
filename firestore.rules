@@ -1,0 +1,162 @@
+rules_version = '2';
+
+// Replace OWNER_EMAIL below with your Google account email (lower case),
+// the same one as in js/config.js and storage.rules.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner() {
+      return request.auth != null
+        && request.auth.token.email == 'PASTE_OWNER_EMAIL@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    function codePath(h) { return /databases/$(database)/documents/codes/$(h); }
+    function sessionPath() { return /databases/$(database)/documents/sessions/$(request.auth.uid); }
+
+    function codeLive(h) {
+      return exists(codePath(h))
+        && get(codePath(h)).data.revoked == false
+        && get(codePath(h)).data.expiresAt > request.time;
+    }
+
+    // A builder = signed in (anonymously) with a session tied to a live code word.
+    function isBuilder() {
+      return request.auth != null
+        && exists(sessionPath())
+        && codeLive(get(sessionPath()).data.codeHash);
+    }
+
+    function myName() { return get(sessionPath()).data.name; }
+
+    function sub(sid) { return get(/databases/$(database)/documents/submissions/$(sid)).data; }
+
+    // ---- Code words: owner only. Builders may look up one code by its hash
+    // (they already know the code) to see its expiry date. ----
+    match /codes/{h} {
+      allow get: if request.auth != null;
+      allow list: if isOwner();
+      allow create: if isOwner()
+        && request.resource.data.keys().hasOnly(['hint', 'issuedAt', 'expiresAt', 'revoked'])
+        && request.resource.data.revoked == false
+        && request.resource.data.issuedAt == request.time;
+      allow update: if isOwner()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revoked'])
+        && request.resource.data.revoked == true;
+      allow delete: if false;
+    }
+
+    // ---- Sessions: one per anonymous sign-in, created only with a live code. ----
+    match /sessions/{uid} {
+      allow create: if request.auth != null && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['codeHash', 'name', 'deviceId', 'createdAt'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 2 && request.resource.data.name.size() <= 80
+        && request.resource.data.createdAt == request.time
+        && codeLive(request.resource.data.codeHash);
+      allow read: if isOwner() || (request.auth != null && request.auth.uid == uid);
+      allow update, delete: if false;
+    }
+
+    // ---- Submissions: one document per area revision, id = <areaId>__r<revision>. ----
+    match /submissions/{sid} {
+      allow read: if isOwner() || isBuilder();
+
+      // Builders start revision 1.
+      allow create: if isBuilder()
+        && request.resource.data.keys().hasOnly(['areaId', 'revision', 'status', 'checklistVersion'])
+        && request.resource.data.revision == 1
+        && request.resource.data.status == 'draft'
+        && sid == request.resource.data.areaId + '__r1';
+
+      // The owner reopens by creating the next revision, after a submitted one.
+      allow create: if isOwner()
+        && request.resource.data.keys().hasOnly(['areaId', 'revision', 'status', 'checklistVersion', 'reopenReason', 'reopenedAt'])
+        && request.resource.data.status == 'draft'
+        && request.resource.data.revision > 1
+        && request.resource.data.reopenedAt == request.time
+        && request.resource.data.reopenReason is string && request.resource.data.reopenReason.size() > 0
+        && sid == request.resource.data.areaId + '__r' + string(request.resource.data.revision)
+        && sub(request.resource.data.areaId + '__r' + string(request.resource.data.revision - 1)).status == 'submitted';
+
+      // While a draft: no-op re-saves, or the one-way submit. Nothing can change after.
+      allow update: if isBuilder()
+        && resource.data.status == 'draft'
+        && (
+          request.resource.data.diff(resource.data).affectedKeys().size() == 0
+          || (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+              ['status', 'submittedAt', 'submittedBy', 'submittedByName', 'certName', 'certRole', 'fingerprint', 'answeredCount'])
+            && request.resource.data.status == 'submitted'
+            && request.resource.data.submittedAt == request.time
+            && request.resource.data.submittedBy == request.auth.uid
+            && request.resource.data.submittedByName == myName()
+            && request.resource.data.certName is string && request.resource.data.certName.size() >= 3
+            && request.resource.data.certRole is string && request.resource.data.certRole.size() >= 2
+            && request.resource.data.fingerprint is string && request.resource.data.fingerprint.size() == 64
+          )
+        );
+
+      allow delete: if false;
+
+      // Answers: editable only while the area is a draft.
+      match /results/{itemId} {
+        allow read: if isOwner() || isBuilder();
+        allow create, update: if isBuilder()
+          && sub(sid).status == 'draft'
+          && request.resource.data.keys().hasOnly(['result', 'note', 'by', 'byName', 'updatedAt'])
+          && request.resource.data.result in ['pass', 'defect', 'na']
+          && request.resource.data.note is string && request.resource.data.note.size() <= 2000
+          && (request.resource.data.result == 'pass' || request.resource.data.note.size() > 0)
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.byName == myName()
+          && request.resource.data.updatedAt == request.time;
+        allow delete: if false;
+      }
+
+      // Notes added after submission: append-only.
+      match /addenda/{aid} {
+        allow read: if isOwner() || isBuilder();
+        allow create: if isBuilder()
+          && sub(sid).status == 'submitted'
+          && request.resource.data.keys().hasOnly(['itemId', 'text', 'by', 'byName', 'createdAt'])
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 4000
+          && request.resource.data.itemId is string
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.byName == myName()
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
+
+      // Photo records (the files live in Storage): append-only.
+      match /photos/{pid} {
+        allow read: if isOwner() || isBuilder();
+        allow create: if isBuilder()
+          && exists(/databases/$(database)/documents/submissions/$(sid))
+          && request.resource.data.keys().hasOnly(['itemId', 'addendumId', 'path', 'by', 'byName', 'takenAt', 'source', 'uploadedAt'])
+          && request.resource.data.path == 'photos/' + sid + '/' + request.auth.uid + '_' + pid + '.jpg'
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.byName == myName()
+          && request.resource.data.source in ['camera', 'gallery']
+          && request.resource.data.uploadedAt == request.time;
+        allow update, delete: if false;
+      }
+    }
+
+    // ---- Owner's records ----
+    match /reviews/{rid} {
+      allow read: if isOwner();
+      allow create: if isOwner()
+        && request.resource.data.keys().hasOnly(['submissionId', 'decision', 'comment', 'at'])
+        && request.resource.data.decision in ['accepted', 'reopened']
+        && request.resource.data.at == request.time;
+      allow update, delete: if false;
+    }
+
+    match /defects/{did} {
+      allow read, create, update: if isOwner();
+      allow delete: if false;
+    }
+  }
+}
