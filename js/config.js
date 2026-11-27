@@ -12,7 +12,7 @@ export const firebaseConfig = {
 
 // 2. The Google account email that owns the dashboard. Must match the email
 //    in firestore.rules and storage.rules.
-export const OWNER_EMAIL = "PASTE_OWNER_EMAIL@gmail.com";
+export const OWNER_EMAIL = "markrenolds1992@gmail.com";
 
 // How long a code word stays valid.
 export const CODE_VALID_DAYS = 10;
