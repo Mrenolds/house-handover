@@ -6,7 +6,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
 import {
   auth, db, AREAS, h, toast, normCode, sha256, subId, latestByArea, fmt,
-  fingerprint, statusBadge, RESULT_LABEL, itemsFor, outstandingExtras,
+  fingerprint, statusBadge, RESULT_LABEL, itemsFor, outstandingExtras, APP_VERSION,
 } from "./common.js";
 import { GROUPS, AREA_BY_ID, CHECKLIST_VERSION } from "./checklist.js";
 import { queuePhoto, onQueueChange, pendingCount, processQueue, localPhotos } from "./photos.js";
@@ -183,7 +183,7 @@ function homeScreen() {
     h("p", { class: "muted" }, `${done} of ${AREAS.length} areas submitted. Open an area, check every item, then certify and submit it.`),
     newTotal ? h("p", { class: "warn" }, `The owner has added ${newTotal} new check${newTotal > 1 ? "s" : ""} to areas already submitted. Open the areas marked "new checks".`) : null,
     ...groups,
-    h("p", {}, h("button", { class: "link", onclick: () => { signOut(auth); } }, "Sign out")));
+    h("p", {}, h("button", { class: "link", onclick: () => { signOut(auth); } }, "Sign out"), h("span", { class: "muted small" }, `  · app v${APP_VERSION}`)));
 }
 
 // ---------- Area ----------

@@ -8,7 +8,7 @@ import {
 import { ref, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-storage.js";
 import {
   auth, db, storage, AREAS, h, toast, normCode, sha256, subId, latestByArea, fmt,
-  fingerprint, statusBadge, RESULT_LABEL, itemsFor, outstandingExtras,
+  fingerprint, statusBadge, RESULT_LABEL, itemsFor, outstandingExtras, APP_VERSION,
 } from "./common.js";
 import { GROUPS, AREA_BY_ID, CHECKLIST_VERSION, TARGETS, areasForTarget } from "./checklist.js";
 import { OWNER_EMAIL, CODE_VALID_DAYS } from "./config.js";
@@ -106,7 +106,7 @@ function refreshOutstanding() {
 function nav() {
   const tab = (id, label) => h("button", { class: `tab${S.tab === id ? " on" : ""}`, onclick: () => { S.tab = id; draw(); } }, label);
   return h("header", { class: "noprint" },
-    h("h1", {}, "Handover — owner"),
+    h("h1", {}, "Handover — owner ", h("span", { class: "muted small" }, `v${APP_VERSION}`)),
     h("div", { class: "row" }, tab("progress", "Progress"), tab("defects", "Defects"), tab("checklist", "Checklist"), tab("access", "Code word"), tab("export", "Export"),
       h("button", { class: "link", onclick: () => signOut(auth) }, "Sign out")));
 }

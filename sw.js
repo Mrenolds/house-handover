@@ -1,6 +1,6 @@
 // Keeps the builder app usable with no signal: app files and the Firebase
 // SDK are cached; data sync is handled by Firestore's own offline cache.
-const CACHE = "handover-v4";
+const CACHE = "handover-v5";
 const APP = [
   "./", "index.html", "css/style.css",
   "js/builder.js", "js/common.js", "js/checklist.js", "js/config.js", "js/photos.js",
@@ -20,7 +20,9 @@ self.addEventListener("fetch", (e) => {
   const sameOrigin = url.startsWith(self.location.origin);
   if (!sameOrigin && !url.startsWith(SDK)) return; // Firebase API calls go straight to the network
   // Network first (so updates arrive), cache as fallback when offline.
-  e.respondWith(fetch(e.request).then((res) => {
+  // no-cache: always ask the server for the newest file (GitHub Pages otherwise lets
+  // browsers reuse files for 10 minutes); the cached copy is only used offline.
+  e.respondWith(fetch(e.request, { cache: "no-cache" }).then((res) => {
     if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); }
     return res;
   }).catch(() => caches.match(e.request, { ignoreSearch: true })));
