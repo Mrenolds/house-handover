@@ -124,14 +124,16 @@ service cloud.firestore {
           && request.resource.data.updatedAt == request.time;
       }
 
-      // Answers to checks the owner added after this revision was submitted.
+      // Answers to checks added (by the owner or to the built-in list) after this revision was submitted.
       // One per check, written once with its own certification, never changed.
       match /supplements/{itemId} {
         allow read: if isOwner() || isBuilder();
         allow create: if isBuilder()
           && sub(sid).status == 'submitted'
-          && exists(/databases/$(database)/documents/extraItems/$(itemId))
-          && get(/databases/$(database)/documents/extraItems/$(itemId)).data.areaId == sub(sid).areaId
+          // An added check must belong to this area; built-in checks added to the
+          // checklist after submission have no extraItems record.
+          && (!exists(/databases/$(database)/documents/extraItems/$(itemId))
+              || get(/databases/$(database)/documents/extraItems/$(itemId)).data.areaId == sub(sid).areaId)
           && !exists(/databases/$(database)/documents/submissions/$(sid)/results/$(itemId))
           && request.resource.data.keys().hasOnly(['result', 'note', 'by', 'byName', 'certName', 'certRole', 'at'])
           && request.resource.data.result in ['pass', 'defect', 'na']

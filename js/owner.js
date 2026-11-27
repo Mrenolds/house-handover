@@ -8,7 +8,7 @@ import {
 import { ref, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-storage.js";
 import {
   auth, db, storage, AREAS, h, toast, normCode, sha256, subId, latestByArea, fmt,
-  fingerprint, statusBadge, RESULT_LABEL, itemsFor, outstandingExtras, APP_VERSION,
+  fingerprint, statusBadge, RESULT_LABEL, itemsFor, outstandingItems, APP_VERSION,
 } from "./common.js";
 import { GROUPS, AREA_BY_ID, CHECKLIST_VERSION, TARGETS, areasForTarget } from "./checklist.js";
 import { OWNER_EMAIL, CODE_VALID_DAYS } from "./config.js";
@@ -91,11 +91,11 @@ function refreshOutstanding() {
     const out = {};
     await Promise.all(AREAS.map(async (a) => {
       const sub = S.latest[a.id];
-      if (!sub || sub.status !== "submitted" || !S.extras.some((x) => x.areaId === a.id && x.active)) return;
+      if (!sub || sub.status !== "submitted") return;
       // A submitted revision's answers never change, so cache them.
       S.resultIds[sub.id] ||= new Set((await getDocs(collection(db, "submissions", sub.id, "results"))).docs.map((d) => d.id));
       const supp = new Set((await getDocs(collection(db, "submissions", sub.id, "supplements"))).docs.map((d) => d.id));
-      const list = outstandingExtras(a.id, S.extras, sub, S.resultIds[sub.id], supp);
+      const list = outstandingItems(a.id, S.extras, sub, S.resultIds[sub.id], supp);
       if (list.length) out[a.id] = list;
     }));
     S.outstanding = out;
@@ -204,9 +204,9 @@ async function detail(areaId, rev) {
       const r = data.results[i.id];
       const sp = data.supp[i.id];
       const x = r || sp;
-      const todo = !x && i.extra && sub.status === "submitted";
+      const todo = !x && sub.status === "submitted";
       return h("tr", { class: x?.result === "defect" ? "defect" : todo ? "todo" : "" },
-        h("td", {}, i.extra ? h("span", { class: "badge b-new" }, sp ? "Added check" : "Added by you") : null, " ", i.text),
+        h("td", {}, (i.extra || sp || todo) ? h("span", { class: "badge b-new" }, sp ? "Added check" : i.extra ? "Added by you" : "New check") : null, " ", i.text),
         h("td", {}, x ? RESULT_LABEL[x.result] : todo ? "To do" : "—"),
         h("td", {}, x?.note || "", thumbs(data.photos.filter((p) => p.itemId === i.id && !p.addendumId))),
         h("td", { class: "small muted" }, r ? `${r.byName}, ${fmt(r.updatedAt)}` : sp ? `${sp.byName}, ${fmt(sp.at)} — certified by ${sp.certName} (${sp.certRole})` : ""));

@@ -18,7 +18,7 @@ export const db = initializeFirestore(app, {
 export const storage = getStorage(app);
 
 // Shown in the page headers so you can tell which version is loaded.
-export const APP_VERSION = "1.4 (27 Nov)";
+export const APP_VERSION = "1.5 (27 Nov)";
 
 export const RESULT_LABEL = { pass: "Pass", defect: "Defect", na: "N/A" };
 
@@ -88,10 +88,11 @@ export function itemsFor(areaId, extras, { includeRetired = false } = {}) {
   return [...base, ...more];
 }
 
-// Extra checks still to do on a submitted revision: not answered in it, not added since.
-export function outstandingExtras(areaId, extras, sub, resultIds, suppIds) {
+// Checks still to do on a submitted revision: any current check (built-in or added by
+// the owner) that wasn't answered in that revision and hasn't been answered since.
+export function outstandingItems(areaId, extras, sub, resultIds, suppIds) {
   if (!sub || sub.status !== "submitted") return [];
-  return extras.filter((x) => x.areaId === areaId && x.active && !resultIds.has(x.id) && !suppIds.has(x.id));
+  return itemsFor(areaId, extras).filter((i) => !resultIds.has(i.id) && !suppIds.has(i.id));
 }
 
 export { AREAS };

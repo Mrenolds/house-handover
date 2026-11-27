@@ -2,17 +2,17 @@ import {
   signInAnonymously, signOut, onAuthStateChanged,
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
 import {
-  doc, collection, setDoc, updateDoc, getDoc, onSnapshot, serverTimestamp,
+  doc, collection, setDoc, updateDoc, getDoc, getDocsFromServer, onSnapshot, serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
 import {
   auth, db, AREAS, h, toast, normCode, sha256, subId, latestByArea, fmt,
-  fingerprint, statusBadge, RESULT_LABEL, itemsFor, outstandingExtras, APP_VERSION,
+  fingerprint, statusBadge, RESULT_LABEL, itemsFor, outstandingItems, APP_VERSION,
 } from "./common.js";
 import { GROUPS, AREA_BY_ID, CHECKLIST_VERSION } from "./checklist.js";
 import { queuePhoto, onQueueChange, pendingCount, processQueue, localPhotos } from "./photos.js";
 
 const root = document.getElementById("app");
-const S = { session: null, subs: {}, unsub: [], codeExpires: null, extras: [], supp: {}, suppUnsub: {} };
+const S = { session: null, subs: {}, unsub: [], codeExpires: null, extras: [], supp: {}, suppUnsub: {}, resIds: {}, resLoading: {} };
 
 function deviceId() {
   let id = localStorage.getItem("hv-device");
@@ -138,15 +138,23 @@ function watchSupp(sid) {
     if (S.screen === "home") homeScreen(); else if (S.screen === "area") drawArea();
   }, () => {});
 }
+// Which checks a submitted revision answered. Those answers never change, so load once,
+// from the server only (an offline cache could be incomplete and show false "new checks").
+function loadResIds(sid) {
+  if (S.resIds[sid] || S.resLoading[sid]) return;
+  S.resLoading[sid] = true;
+  getDocsFromServer(collection(db, "submissions", sid, "results")).then((qs) => {
+    S.resIds[sid] = new Set(qs.docs.map((d) => d.id));
+    if (S.screen === "home") homeScreen();
+  }).catch(() => { S.resLoading[sid] = false; });
+}
 function newChecksCount(areaId) {
   const s = S.subs[areaId];
   if (!s || s.status !== "submitted") return 0;
-  const mine = S.extras.filter((x) => x.areaId === areaId && x.active);
-  if (!mine.length) return 0;
   watchSupp(s.id);
-  const done = S.supp[s.id] || {};
-  // Checks added after submission that nobody has answered yet.
-  return mine.filter((x) => !done[x.id] && (!x.createdAt || !s.submittedAt || x.createdAt.seconds > s.submittedAt.seconds)).length;
+  loadResIds(s.id);
+  if (!S.resIds[s.id] || !S.supp[s.id]) return 0;
+  return outstandingItems(areaId, S.extras, s, S.resIds[s.id], new Set(Object.keys(S.supp[s.id]))).length;
 }
 
 function topBar(title, back) {
@@ -203,6 +211,7 @@ function openArea(areaId) {
   }, (err) => { if (err.code === "permission-denied" && navigator.onLine) expired(); }));
   S.unsub.push(onSnapshot(collection(db, "submissions", sid, "results"), { includeMetadataChanges: true }, (qs) => {
     S.area.results = Object.fromEntries(qs.docs.map((d) => [d.id, { ...d.data(), _pending: d.metadata.hasPendingWrites }]));
+    S.area.resultsFromServer ||= !qs.metadata.fromCache;
     drawArea();
   }));
   S.unsub.push(onSnapshot(collection(db, "submissions", sid, "photos"), (qs) => {
@@ -255,7 +264,7 @@ function photoButtons(itemId, addendumIdFn) {
     input.addEventListener("change", async () => {
       for (const f of input.files) {
         // Locked area: photos only for a note, or for a new check the owner added.
-        if (!editable() && !addendumIdFn && !S.extras.some((x) => x.id === itemId)) continue;
+        if (!editable() && !addendumIdFn && !S.area.outstandingIds?.has(itemId)) continue;
         if (editable()) ensureSub();
         await queuePhoto({
           sid: S.area.sid, itemId, addendumId: addendumIdFn ? addendumIdFn() : "",
@@ -325,7 +334,10 @@ function drawArea() {
 
   const parts = [...head, ...cards];
   if (!canEdit) {
-    const outstanding = outstandingExtras(a.id, S.extras, sub, new Set(Object.keys(R)), new Set(Object.keys(supp)));
+    // Only once the answers have come from the server, so nothing is wrongly shown as new.
+    const outstanding = (S.area.resultsFromServer || S.resIds[S.area.sid])
+      ? outstandingItems(a.id, S.extras, sub, S.resIds[S.area.sid] || new Set(Object.keys(R)), new Set(Object.keys(supp))) : [];
+    S.area.outstandingIds = new Set(outstanding.map((i) => i.id));
     const answeredSupp = items.filter((i) => supp[i.id]);
     if (answeredSupp.length) {
       parts.push(h("h2", {}, "Added checks — certified"));
