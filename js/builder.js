@@ -308,7 +308,8 @@ function drawArea() {
     h("p", {}, statusBadge(sub ? sub.status : "none"), " ",
       h("span", { class: "muted" }, `${answered}/${inRev.length} checked`, S.area.rev > 1 ? ` · revision ${S.area.rev}` : "")),
   ];
-  if (sub?.reopenReason) head.push(h("p", { class: "warn" }, `Reopened by the owner: ${sub.reopenReason}`));
+  if (sub?.reopenReason) head.push(h("p", { class: "warn" }, `Reopened by the owner: ${sub.reopenReason}`,
+    Object.values(R).some((r) => r.copiedFrom) ? h("div", { class: "small" }, "Earlier answers are filled in — change what needs fixing, then submit again.") : null));
   if (!canEdit) head.push(h("p", { class: "ok" }, `Submitted ${fmt(sub.submittedAt)} by ${sub.certName} (${sub.certRole}). Locked — you can add notes and photos below.`));
 
   const cards = inRev.map((item) => {

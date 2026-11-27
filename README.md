@@ -59,8 +59,9 @@ After a minute the app is live at:
 2. Send the team the app link and the code word, ideally in two separate messages.
 3. Each person signs in with their name and the code word. The code works for 10 days from issue;
    issue a new one to extend, or **Revoke** to cut access immediately.
-4. Watch progress on the dashboard. **Accept** an area when you're happy, or **Reopen** it with a reason —
-   that creates revision 2 for the builders; revision 1 stays as it was certified.
+4. Watch progress on the dashboard. **Accept** an area when you're happy. To send it back, use
+   **Undo submission** (the builders get it back with all answers filled in and fix only what's needed) or
+   **Reopen blank** (start again). Either way the certified version stays in the history as revision 1.
 5. Track fixes on the **Defects** tab (fix-by date, closed, comment). Export everything as CSV, and use
    **Print / PDF** on any area for a signed record.
 

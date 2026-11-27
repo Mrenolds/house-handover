@@ -112,6 +112,16 @@ service cloud.firestore {
           && request.resource.data.byName == myName()
           && request.resource.data.updatedAt == request.time;
         allow delete: if false;
+
+        // The owner undoing a submission copies its answers into the new draft
+        // revision (same batch), so builders only fix what is needed.
+        allow create: if isOwner()
+          && getAfter(/databases/$(database)/documents/submissions/$(sid)).data.status == 'draft'
+          && request.resource.data.keys().hasOnly(['result', 'note', 'by', 'byName', 'updatedAt', 'copiedFrom'])
+          && request.resource.data.result in ['pass', 'defect', 'na']
+          && request.resource.data.note is string
+          && request.resource.data.copiedFrom is string
+          && request.resource.data.updatedAt == request.time;
       }
 
       // Answers to checks the owner added after this revision was submitted.

@@ -218,7 +218,9 @@ async function detail(areaId, rev) {
     sub.status === "submitted" && isLatest && review?.decision !== "accepted"
       ? h("button", { class: "primary", onclick: () => decide(sub, "accepted") }, "Accept") : null,
     sub.status === "submitted" && isLatest
-      ? h("button", { onclick: () => reopen(sub) }, "Reopen") : null,
+      ? h("button", { onclick: () => reopen(sub, true), title: "Back to the builders with their answers kept" }, "Undo submission") : null,
+    sub.status === "submitted" && isLatest
+      ? h("button", { onclick: () => reopen(sub, false), title: "Back to the builders with nothing filled in" }, "Reopen blank") : null,
     h("button", { onclick: () => window.print() }, "Print / PDF"));
 
   render(nav(), back,
@@ -251,17 +253,42 @@ async function decide(sub, decision, comment = "") {
   detail(sub.areaId);
 }
 
-async function reopen(sub) {
-  const reason = prompt("Why are you reopening this area? The builders will see this.");
+// Undo a submission: the area goes back to the builders as a new draft revision.
+// keep = true copies every answer (including answers to added checks) into it, so the
+// builders only change what needs fixing. The certified revision is never altered.
+async function reopen(sub, keep) {
+  const reason = prompt(keep
+    ? "Undo this submission. What should the builders fix? (They will see this.)"
+    : "Reopen from blank. Why? (The builders will see this.)");
   if (!reason || !reason.trim()) return;
   const rev = sub.revision + 1;
+  const newSid = subId(sub.areaId, rev);
   try {
-    await setDoc(doc(db, "submissions", subId(sub.areaId, rev)), {
+    const batch = writeBatch(db);
+    batch.set(doc(db, "submissions", newSid), {
       areaId: sub.areaId, revision: rev, status: "draft", checklistVersion: CHECKLIST_VERSION,
       reopenReason: reason.trim(), reopenedAt: serverTimestamp(),
     });
-    await decide(sub, "reopened", reason.trim());
-  } catch (e) { toast("Reopen failed: " + e.code); }
+    let copied = 0;
+    if (keep) {
+      const [res, sup] = await Promise.all([
+        getDocs(collection(db, "submissions", sub.id, "results")),
+        getDocs(collection(db, "submissions", sub.id, "supplements")),
+      ]);
+      for (const d of [...res.docs, ...sup.docs]) {
+        const r = d.data();
+        batch.set(doc(db, "submissions", newSid, "results", d.id), {
+          result: r.result, note: r.note || "", by: r.by, byName: r.byName,
+          updatedAt: serverTimestamp(), copiedFrom: sub.id,
+        });
+        copied++;
+      }
+    }
+    batch.set(doc(collection(db, "reviews")), { submissionId: sub.id, decision: "reopened", comment: reason.trim(), at: serverTimestamp() });
+    await batch.commit();
+    toast(keep ? `Submission undone: ${copied} answers kept for the builders to edit.` : "Reopened from blank.");
+    detail(sub.areaId);
+  } catch (e) { toast("Could not reopen: " + (e.code || e.message)); }
 }
 
 // ---------- Defects ----------
