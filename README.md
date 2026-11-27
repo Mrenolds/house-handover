@@ -18,12 +18,12 @@ The checklist (55 areas, from the floor plans and the revised handover checklist
 ### 1. Firebase project
 1. Go to [console.firebase.google.com](https://console.firebase.google.com) and create a project (or use an existing one dedicated to this).
 2. **Upgrade to Blaze** (needed for photo storage). Then in Google Cloud Billing → Budgets, set a budget of £1 with email alerts.
-3. **Build → Authentication → Get started.** Enable two sign-in providers:
+3. **Security → Authentication → Get started.** Enable two sign-in providers:
    - **Anonymous** (used by the builders, together with the code word)
    - **Google** (used by you for the dashboard)
 4. **Authentication → Settings → Authorized domains → Add domain:** `mrenolds.github.io`
-5. **Build → Firestore Database → Create database** → production mode → a location near Nigeria/UK (e.g. `europe-west2` London).
-6. **Build → Storage → Get started** → production mode, same region if offered.
+5. **Databases & Storage → Firestore Database → Create database** → Standard edition, production mode, location `europe-west2` (London).
+6. **Databases & Storage → Storage → Get started** → location **US-EAST1** (only US-CENTRAL1, US-EAST1 and US-WEST1 get the "Always Free" storage allowance), production mode.
 
 ### 2. Put your owner email into the code (3 places)
 Use the Google account you will sign in with on the dashboard, in lower case.
