@@ -7,7 +7,10 @@ import { getStorage } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-s
 import { firebaseConfig } from "./config.js";
 import { AREAS } from "./checklist.js";
 
-export const app = initializeApp(firebaseConfig);
+// Builder and owner pages use separately named app instances, so each keeps its
+// own sign-in in the browser and one can never sign the other out.
+const ROLE = location.pathname.endsWith("owner.html") ? "owner" : "builder";
+export const app = initializeApp(firebaseConfig, ROLE);
 export const auth = getAuth(app);
 export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),

@@ -102,7 +102,7 @@ async function loadSession(user) {
 
 onAuthStateChanged(auth, async (user) => {
   if (!user) { S.session = null; if (!loggingIn) loginScreen(); return; }
-  if (!user.isAnonymous) { await signOut(auth); return; } // owner account on this device
+  if (!user.isAnonymous) { if (!loggingIn) loginScreen(); return; } // never sign anyone else out
   if (!loggingIn) loadSession(user);
 });
 
