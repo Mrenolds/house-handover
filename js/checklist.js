@@ -13,6 +13,7 @@ export const GROUPS = [
 
 const EVERY_ROOM = [
   ["er-doors", "Doors: open and close without scraping, stay put half-open, even gap, frame firm; lock works with every key; handles firm; door stop fitted"],
+  ["er-door-finish", "Door finish (both faces and all edges, including frame and architrave): painted or finished evenly in the colour and sheen as per the agreed specification; no ridges, runs, brush marks, rough or missed patches"],
   ["er-windows", "Windows: open, close and lock; glass unscratched and to spec; seals complete; mosquito nets fitted without tears; track drain holes open; burglary proofs firm with key/release"],
   ["er-walls", "Walls and paint: flat and plumb; no cracks, hollow plaster, damp, mould or white salty marks; one even colour, no paint on sockets, switches, tiles or glass"],
   ["er-ceiling", "POP ceiling: cornices complete and even; no cracks or sagging; light fittings and fans fixed to secure support"],
@@ -23,13 +24,14 @@ const EVERY_ROOM = [
   ["er-ac", "Air conditioning (if fitted): starts from remote; cool/fan/dry and swing work; air clearly cold within 10 min; no drips; quiet; pipes insulated; wall holes sealed"],
   ["er-data", "Data/TV points: where shown on the plan, and live"],
   ["er-pests", "Pests: no termite mud tubes; gaps around pipes and cables sealed"],
+  ["er-finish-general", "General finishing: no poor workmanship anywhere in the room (uneven edges, gaps, rough patches, untidy silicone or grout, filler marks, misaligned covers or fittings); all finishes match the agreed description"],
   ["er-clean", "Clean: no paint, cement, adhesive or stickers on any surface"],
 ];
 
 const BEDROOM = [
   ["bd-wardrobe", "Built-in wardrobe: level and fixed to wall; doors aligned and close softly; drawers run smoothly; hinges and handles tight; no swelling or peeling"],
   ["bd-rails", "Wardrobe hanging rails firm and level; shelves as designed; internal lights (if fitted) work; wardrobe locks work"],
-  ["bd-bedside", "Bedside sockets and switches on both sides; curtain rods or blinds fitted where agreed"],
+  ["bd-bedside", "Enough sockets by the bed on both sides (number and positions as per the agreed specification electrical plan); bedside switches work; curtain rods or blinds fitted where agreed"],
 ];
 
 const CLOSET = BEDROOM.slice(0, 2);
@@ -43,9 +45,12 @@ const BATHROOM = [
   ["bt-shower-drain", "Shower floor drains quickly; water stays inside the shower area; glass screen fixed and sealed"],
   ["bt-bath", "Bath (if fitted) fills, holds and drains; silicone continuous and mould-free"],
   ["bt-wc", "WC flushes fully on both buttons, refills and stops; pan firm and sealed; no leaks at cistern or hose; paper clears in one flush"],
+  ["bt-flush", "Flush strength: a full flush clears the pan completely in one go (test with paper); the half flush clears liquids; cistern refills within about 2 minutes"],
   ["bt-faucet", "Health faucet works without dripping"],
   ["bt-falls", "Floor falls to the drain (marble test); every drain has a working trap; no sewer smell"],
   ["bt-fittings", "Extractor fan or opening window works; mirror, towel rail, toilet roll holder and shelves firm"],
+  ["bt-fixtures", "No loose fixtures: push and pull each tap, mixer, shower head and rail, basin, WC pan and seat, mirror, towel rail, roll holder, shelf and glass screen — all firmly fixed"],
+  ["bt-finish", "Vanity counter and pipework finish clean: counter edges and joints neat, silicone tidy, pipes and traps neatly run, clipped, and free of cement or paint; materials match the agreed description"],
   ["bt-door", "Door locks from inside and opens from outside in an emergency"],
 ];
 
@@ -70,7 +75,7 @@ const ROOMS = [
   ["g-bath-office", "ground", "Bath and WC (by gym)", "", ["every", "bath"], ""],
   ["g-bed1", "ground", "Bedroom 1", "12.5", ["every", "bed"], ""],
   ["g-lobby", "ground", "Lobby and stair", "8.0", ["every"], STAIR + "; Ceiling cassette level, grille aligned with POP"],
-  ["g-kitchen", "ground", "Kitchen (with island)", "19.2", ["every"], "Cabinets level and fixed to wall; doors aligned; soft-close works; drawers not swollen; Quartz worktop level, uncracked, unchipped; joints and wall edge sealed; Sink holds water, drains quickly, no leaks underneath; waste trap accessible; Hot and cold taps the right way round, no drips; Hob: every burner lights with a steady blue flame; oven heats; grill works; Cooker hood works on all speeds, light works, vents outside; Built-in appliances power on and run a short cycle; Island sockets and lights work; worktop sockets a safe distance from sink and hob; Kitchen floor drain runs freely; Heat detector fitted and sounds on test; fire blanket and extinguisher present"],
+  ["g-kitchen", "ground", "Kitchen (with island)", "19.2", ["every"], "Cabinets level and fixed to wall; doors aligned; soft-close works; drawers not swollen; Quartz worktop level, uncracked, unchipped; joints and wall edge sealed; Sink holds water, drains quickly, no leaks underneath; waste trap accessible; Hot and cold taps the right way round, no drips; Hob: every burner lights with a steady blue flame; oven heats; grill works; Cooker hood works on all speeds, light works, vents outside; Built-in appliances power on and run a short cycle; Island sockets and lights work; worktop sockets a safe distance from sink and hob; Kitchen floor drain runs freely; Heat detector fitted and sounds on test; fire blanket and extinguisher present; Enough sockets along the backsplash and island: number and positions as per the agreed specification electrical plan; Gas cylinder can be connected to the cooker: cylinder space outside, pipe, regulator and shut-off valve fitted — test-connect a cylinder and light every burner; Concrete sink has no chips, cracks, rough or porous patches, is sealed, and matches the agreed description; Counter and piping finish clean: worktop edges and joints neat, silicone tidy, exposed pipes neatly run, clipped, free of cement or paint"],
   ["g-pantry", "ground", "Pantry", "5.1", ["every"], "Shelves firm; Light works; Ventilation as agreed"],
   ["g-utility", "ground", "Utility room (laundry)", "6.4", ["every"], "Washing machine point has cold-water valve, waste pipe and dedicated socket; Short wash cycle runs with no leaks and drains properly; Floor drain runs freely"],
   ["g-maid", "ground", "Maid's room", "7.3", ["every", "bed"], ""],
@@ -92,7 +97,7 @@ const ROOMS = [
   ["s-bath", "second", "Master bath", "3.7", ["every", "bath"], ""],
   ["s-wc", "second", "Master WC", "3.7", ["every", "bath"], ""],
   ["s-cinema", "second", "Cinema", "23.9", ["every"], "Blackout on windows; Projector/TV, speaker and HDMI conduits and points where agreed; Dimmable lights work; Dedicated AV circuit; Acoustic treatment if specified; AC runs quietly"],
-  ["s-kitchenette", "second", "Kitchenette", "", ["every"], "Cabinets and worktop level and fixed; Sink holds water, drains, no leaks; Sockets and fridge point; Light works; Heat detector fitted and sounds on test"],
+  ["s-kitchenette", "second", "Kitchenette", "", ["every"], "Cabinets and worktop level and fixed; Sink holds water, drains, no leaks; Sockets and fridge point; Light works; Heat detector fitted and sounds on test; Stoneware sink and worktop have no chips, cracks or crazing and match the agreed description; Enough sockets along the backsplash (as per the agreed specification electrical plan); Counter and piping finish clean: edges and joints neat, silicone tidy, pipes neatly run and free of cement or paint"],
   ["s-office", "second", "Office", "6.9", ["every"], "Enough sockets and a data point at the desk"],
   ["s-wc-office", "second", "WC (by office)", "", ["every", "bath"], ""],
 ];
@@ -147,6 +152,7 @@ const OTHER = [
     "Exterior tiles firm and uncracked; paint even, no overspray on windows, tiles or paving",
     "No damp or tide marks at the base of walls",
     "Daikin outdoor units and pipe runs fixed neatly; wall penetrations sealed",
+    "General finishing outside: no poor workmanship (rough render, untidy joints, paint splashes, misaligned fittings); finishes match the agreed description",
   ]],
   ["y-electrical", "systems", "Electrical supply and distribution", [
     "Prepaid meter powered, accepts a token, shows credit",
@@ -232,12 +238,22 @@ const OTHER = [
     "Gate release from intercom works (if fitted)",
     "Wi-Fi router and access points cover all three floors and the second-floor terrace",
     "Smart devices and alarm (if fitted) work from app and manually; accounts transferred to owner",
+    "CCTV camera — Kitchen: installed, live on the recorder and phone app, sharp by day, usable at night, covering the agreed view",
+    "CCTV camera — Entrance: installed, live on the recorder and phone app, sharp by day, usable at night, covering the agreed view",
+    "CCTV camera — Living area (main lounge): installed, live on the recorder and phone app, sharp by day, usable at night, covering the agreed view",
+    "CCTV camera — Stairway: installed, live on the recorder and phone app, sharp by day, usable at night, covering the agreed view",
+    "CCTV camera — First-floor landing: installed, live on the recorder and phone app, sharp by day, usable at night, covering the agreed view",
+    "CCTV camera — Second-floor landing: installed, live on the recorder and phone app, sharp by day, usable at night, covering the agreed view",
+    "CCTV camera — Front of house: installed, live on the recorder and phone app, sharp by day, usable at night, covering the agreed view",
+    "CCTV camera — Side of house: installed, live on the recorder and phone app, sharp by day, usable at night, covering the agreed view",
+    "CCTV camera — Back of house: installed, live on the recorder and phone app, sharp by day, usable at night, covering the agreed view",
   ]],
   ["z-final", "final", "Final walkthrough", [
     "House fully cleaned; no paint, cement, tile adhesive or stickers anywhere",
     "Builder's rubbish, materials and temporary connections removed from house, compound and roof",
     "Electricity meter reading — record it in the note",
     "Photos or video of every room taken on the day",
+    "Final walk-round for poor finishing: doors, counters, pipework, sockets and switch plates, silicone, grout and paint all neat and as described",
   ]],
   ["z-keys", "final", "Keys and access items (record counts)", [
     "External door keys (front, kitchen/back, terrace doors) — record count",
@@ -266,14 +282,14 @@ function build() {
       const t = text.charAt(0).toUpperCase() + text.slice(1);
       items.push({ id: `sp${i + 1}-${slug(t).slice(0, 20)}`, text: t });
     });
-    areas.push({ id, group, name, size, items });
+    areas.push({ id, group, name, size, items, kinds: tpls });
   }
   for (const [id, name] of TERRACES) {
-    areas.push({ id, group: "external", name, size: "", items: TERRACE.map(([iid, text]) => ({ id: iid, text })) });
+    areas.push({ id, group: "external", name, size: "", kinds: ["terrace"], items: TERRACE.map(([iid, text]) => ({ id: iid, text })) });
   }
   for (const [id, group, name, list] of OTHER) {
     areas.push({
-      id, group, name, size: "",
+      id, group, name, size: "", kinds: [group],
       items: list.map((text, i) => ({
         id: `i${String(i + 1).padStart(2, "0")}`,
         text,
@@ -286,3 +302,13 @@ function build() {
 
 export const AREAS = build();
 export const AREA_BY_ID = Object.fromEntries(AREAS.map((a) => [a.id, a]));
+
+// Groups of areas the owner can add a new check to in one go.
+export const TARGETS = [
+  { id: "every", name: "Every room (all 34 rooms)" },
+  { id: "bath", name: "All bathrooms and WCs" },
+  { id: "bed", name: "All bedrooms" },
+  { id: "closet", name: "All walk-in closets" },
+  { id: "terrace", name: "All terraces" },
+];
+export const areasForTarget = (t) => AREAS.filter((a) => a.id === t || a.kinds.includes(t));

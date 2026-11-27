@@ -3,18 +3,18 @@ import {
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
 import {
   doc, collection, setDoc, updateDoc, getDocs, onSnapshot, query, where,
-  serverTimestamp, Timestamp,
+  serverTimestamp, Timestamp, writeBatch,
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
 import { ref, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-storage.js";
 import {
   auth, db, storage, AREAS, h, toast, normCode, sha256, subId, latestByArea, fmt,
-  fingerprint, statusBadge, RESULT_LABEL,
+  fingerprint, statusBadge, RESULT_LABEL, itemsFor, outstandingExtras,
 } from "./common.js";
-import { GROUPS, AREA_BY_ID, CHECKLIST_VERSION } from "./checklist.js";
+import { GROUPS, AREA_BY_ID, CHECKLIST_VERSION, TARGETS, areasForTarget } from "./checklist.js";
 import { OWNER_EMAIL, CODE_VALID_DAYS } from "./config.js";
 
 const root = document.getElementById("app");
-const S = { subs: [], latest: {}, reviews: {}, codes: [], tab: "progress", unsub: [] };
+const S = { subs: [], latest: {}, reviews: {}, codes: [], extras: [], outstanding: {}, resultIds: {}, tab: "progress", unsub: [] };
 
 const WORDS = ("acorn amber anchor apple arrow aspen autumn badger bamboo banana basket beacon bear berry birch "
   + "biscuit blossom bramble breeze brick bridge brook bucket butter cabin cactus candle canoe canyon carrot castle "
@@ -60,6 +60,7 @@ function startOwner() {
   S.unsub.push(onSnapshot(collection(db, "submissions"), (qs) => {
     S.subs = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
     S.latest = latestByArea(S.subs);
+    refreshOutstanding();
     if (S.tab === "progress") draw();
     else if (S.tab === "detail" && S.detailArgs) detail(S.detailArgs[0]);
   }, (e) => toast("Can't read data: " + e.code)));
@@ -70,6 +71,11 @@ function startOwner() {
     if (S.tab === "progress") draw();
     else if (S.tab === "detail" && S.detailArgs) detail(...S.detailArgs);
   }));
+  S.unsub.push(onSnapshot(collection(db, "extraItems"), (qs) => {
+    S.extras = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+    refreshOutstanding();
+    if (S.tab === "checklist" || S.tab === "progress") draw();
+  }));
   S.unsub.push(onSnapshot(collection(db, "codes"), (qs) => {
     S.codes = qs.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.issuedAt?.seconds || 0) - (a.issuedAt?.seconds || 0));
     if (S.tab === "access") draw();
@@ -77,11 +83,31 @@ function startOwner() {
   draw();
 }
 
+// Added checks still to be answered on submitted areas: { areaId: [extra, ...] }.
+let outTimer;
+function refreshOutstanding() {
+  clearTimeout(outTimer);
+  outTimer = setTimeout(async () => {
+    const out = {};
+    await Promise.all(AREAS.map(async (a) => {
+      const sub = S.latest[a.id];
+      if (!sub || sub.status !== "submitted" || !S.extras.some((x) => x.areaId === a.id && x.active)) return;
+      // A submitted revision's answers never change, so cache them.
+      S.resultIds[sub.id] ||= new Set((await getDocs(collection(db, "submissions", sub.id, "results"))).docs.map((d) => d.id));
+      const supp = new Set((await getDocs(collection(db, "submissions", sub.id, "supplements"))).docs.map((d) => d.id));
+      const list = outstandingExtras(a.id, S.extras, sub, S.resultIds[sub.id], supp);
+      if (list.length) out[a.id] = list;
+    }));
+    S.outstanding = out;
+    if (S.tab === "progress") draw();
+  }, 400);
+}
+
 function nav() {
   const tab = (id, label) => h("button", { class: `tab${S.tab === id ? " on" : ""}`, onclick: () => { S.tab = id; draw(); } }, label);
   return h("header", { class: "noprint" },
     h("h1", {}, "Handover — owner"),
-    h("div", { class: "row" }, tab("progress", "Progress"), tab("defects", "Defects"), tab("access", "Code word"), tab("export", "Export"),
+    h("div", { class: "row" }, tab("progress", "Progress"), tab("defects", "Defects"), tab("checklist", "Checklist"), tab("access", "Code word"), tab("export", "Export"),
       h("button", { class: "link", onclick: () => signOut(auth) }, "Sign out")));
 }
 
@@ -89,29 +115,54 @@ function draw() {
   if (S.tab === "progress") progress();
   else if (S.tab === "defects") defects();
   else if (S.tab === "access") access();
+  else if (S.tab === "checklist") checklistTab();
   else if (S.tab === "export") exportTab();
 }
 
-// ---------- Progress ----------
+// ---------- Progress: one combined picture of everyone's work ----------
 function progress() {
-  const submitted = AREAS.filter((a) => S.latest[a.id]?.status === "submitted").length;
+  const st = (a) => S.latest[a.id]?.status || "none";
+  const n = (k) => AREAS.filter((a) => st(a) === k).length;
+  const accepted = AREAS.filter((a) => S.latest[a.id] && S.reviews[S.latest[a.id].id]?.decision === "accepted").length;
+  const newChecks = Object.values(S.outstanding).reduce((t, l) => t + l.length, 0);
+  // Who certified what (all revisions, plus who is mid-way through a draft).
+  const team = {};
+  for (const sub of S.subs) {
+    if (sub.status !== "submitted") continue;
+    const t = (team[sub.certName] ||= { areas: [], roles: new Set(), last: null });
+    t.areas.push(AREA_BY_ID[sub.areaId]?.name + (sub.revision > 1 ? ` (rev ${sub.revision})` : ""));
+    t.roles.add(sub.certRole);
+    if (!t.last || sub.submittedAt?.seconds > t.last.seconds) t.last = sub.submittedAt;
+  }
+  const stat = (label, val) => h("div", { class: "stat" }, h("b", {}, val), h("span", {}, label));
   render(nav(),
-    h("p", {}, `${submitted} of ${AREAS.length} areas submitted.`),
+    h("div", { class: "stats" },
+      stat("submitted", `${n("submitted")} / ${AREAS.length}`), stat("in progress", n("draft")), stat("not started", n("none")),
+      stat("accepted by you", accepted), stat("new checks to do", newChecks)),
+    Object.keys(team).length ? h("details", { class: "card" }, h("summary", {}, `Who did what (${Object.keys(team).length} people)`),
+      h("table", {}, h("thead", {}, h("tr", {}, ...["Certified by", "Role", "Areas", "Last submitted"].map((x) => h("th", {}, x)))),
+        h("tbody", {}, ...Object.entries(team).sort((x, y) => y[1].areas.length - x[1].areas.length).map(([name, t]) =>
+          h("tr", {}, h("td", {}, name), h("td", {}, [...t.roles].join(", ")), h("td", {}, `${t.areas.length}: ${t.areas.join(", ")}`), h("td", {}, fmt(t.last))))))) : null,
     ...GROUPS.map((g) => h("section", {}, h("h2", {}, g.name),
       ...AREAS.filter((a) => a.group === g.id).map((a) => {
         const s = S.latest[a.id];
         const rv = s && S.reviews[s.id];
+        const nc = S.outstanding[a.id]?.length || 0;
         return h("button", { class: "area", onclick: () => detail(a.id) },
-          h("span", {}, a.name, s?.revision > 1 ? h("span", { class: "muted small" }, ` rev ${s.revision}`) : ""),
-          h("span", {}, statusBadge(s ? s.status : "none"), rv?.decision === "accepted" ? h("span", { class: "badge b-accepted" }, "Accepted") : null));
+          h("span", {}, a.name, s?.revision > 1 ? h("span", { class: "muted small" }, ` rev ${s.revision}`) : "",
+            s?.status === "submitted" ? h("div", { class: "muted small" }, `by ${s.certName} (${s.certRole}), ${fmt(s.submittedAt)}`) : ""),
+          h("span", {}, statusBadge(s ? s.status : "none"),
+            rv?.decision === "accepted" ? h("span", { class: "badge b-accepted" }, "Accepted") : null,
+            nc ? h("span", { class: "badge b-new" }, `${nc} new check${nc > 1 ? "s" : ""} to do`) : null));
       }))));
 }
 
 async function loadSub(sid) {
-  const [res, ph, ad] = await Promise.all([
+  const [res, ph, ad, sp] = await Promise.all([
     getDocs(collection(db, "submissions", sid, "results")),
     getDocs(collection(db, "submissions", sid, "photos")),
     getDocs(collection(db, "submissions", sid, "addenda")),
+    getDocs(collection(db, "submissions", sid, "supplements")),
   ]);
   const photos = await Promise.all(ph.docs.map(async (d) => {
     const p = d.data();
@@ -121,6 +172,7 @@ async function loadSub(sid) {
   }));
   return {
     results: Object.fromEntries(res.docs.map((d) => [d.id, d.data()])),
+    supp: Object.fromEntries(sp.docs.map((d) => [d.id, d.data()])),
     photos,
     addenda: ad.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0)),
   };
@@ -140,18 +192,25 @@ async function detail(areaId, rev) {
   if (!sub) return render(nav(), back, h("h2", {}, a.name), h("p", {}, "Not started."));
   render(nav(), back, h("h2", {}, a.name), h("p", { class: "muted" }, "Loading…"));
   const data = await loadSub(sub.id);
-  const fpOk = sub.status === "submitted" ? (await fingerprint(areaId, sub.revision, Object.fromEntries(a.items.map((i) => [i.id, data.results[i.id] || {}])))) === sub.fingerprint : null;
+  const fpOk = sub.status === "submitted" ? (await fingerprint(areaId, sub.revision, data.results)) === sub.fingerprint : null;
   const review = S.reviews[sub.id];
   const isLatest = sub.revision === revs[0].revision;
 
-  const rows = a.items.map((i) => {
-    const r = data.results[i.id];
-    return h("tr", { class: r?.result === "defect" ? "defect" : "" },
-      h("td", {}, i.text),
-      h("td", {}, r ? RESULT_LABEL[r.result] : "—"),
-      h("td", {}, r?.note || "", thumbs(data.photos.filter((p) => p.itemId === i.id && !p.addendumId))),
-      h("td", { class: "small muted" }, r ? `${r.byName}, ${fmt(r.updatedAt)}` : ""));
-  });
+  // Built-in items + checks you added (answered in this revision, answered later as an
+  // added check, or still to do). Removed checks show only if someone answered them.
+  const rows = itemsFor(areaId, S.extras, { includeRetired: true })
+    .filter((i) => !i.extra || i.active || data.results[i.id] || data.supp[i.id])
+    .map((i) => {
+      const r = data.results[i.id];
+      const sp = data.supp[i.id];
+      const x = r || sp;
+      const todo = !x && i.extra && sub.status === "submitted";
+      return h("tr", { class: x?.result === "defect" ? "defect" : todo ? "todo" : "" },
+        h("td", {}, i.extra ? h("span", { class: "badge b-new" }, sp ? "Added check" : "Added by you") : null, " ", i.text),
+        h("td", {}, x ? RESULT_LABEL[x.result] : todo ? "To do" : "—"),
+        h("td", {}, x?.note || "", thumbs(data.photos.filter((p) => p.itemId === i.id && !p.addendumId))),
+        h("td", { class: "small muted" }, r ? `${r.byName}, ${fmt(r.updatedAt)}` : sp ? `${sp.byName}, ${fmt(sp.at)} — certified by ${sp.certName} (${sp.certRole})` : ""));
+    });
 
   const actions = h("div", { class: "row noprint" },
     revs.length > 1 ? h("select", { onchange: (e) => detail(areaId, Number(e.target.value)) },
@@ -177,7 +236,7 @@ async function detail(areaId, rev) {
     data.addenda.length || data.photos.some((p) => p.addendumId)
       ? h("div", {}, ...data.addenda.map((ad) => h("div", { class: "card small" },
         h("b", {}, ad.byName), ` · ${fmt(ad.createdAt)}`,
-        ad.itemId ? h("div", { class: "muted" }, a.items.find((i) => i.id === ad.itemId)?.text || "") : null,
+        ad.itemId ? h("div", { class: "muted" }, itemsFor(areaId, S.extras, { includeRetired: true }).find((i) => i.id === ad.itemId)?.text || "") : null,
         h("p", {}, ad.text), thumbs(data.photos.filter((p) => p.addendumId === ad.id)))),
       thumbs(data.photos.filter((p) => p.addendumId && !data.addenda.some((ad) => ad.id === p.addendumId))))
       : h("p", { class: "muted" }, "Nothing yet."),
@@ -212,8 +271,10 @@ async function defects() {
   const latest = Object.values(latestByArea(S.subs.filter((x) => x.status === "submitted")));
   const found = [];
   await Promise.all(latest.map(async (s) => {
-    const qs = await getDocs(query(collection(db, "submissions", s.id, "results"), where("result", "==", "defect")));
-    qs.docs.forEach((d) => found.push({ sub: s, itemId: d.id, ...d.data() }));
+    for (const coll of ["results", "supplements"]) {
+      const qs = await getDocs(query(collection(db, "submissions", s.id, coll), where("result", "==", "defect")));
+      qs.docs.forEach((d) => found.push({ sub: s, itemId: d.id, ...d.data() }));
+    }
   }));
   const track = {};
   (await getDocs(collection(db, "defects"))).docs.forEach((d) => { track[d.id] = d.data(); });
@@ -227,7 +288,7 @@ async function defects() {
     return h("tr", { class: t.closed ? "closed" : "" },
       h("td", {}, n + 1),
       h("td", {}, h("button", { class: "link", onclick: () => detail(a.id, f.sub.revision) }, a.name)),
-      h("td", {}, a.items.find((i) => i.id === f.itemId)?.text || f.itemId, h("div", { class: "muted" }, f.note)),
+      h("td", {}, itemsFor(a.id, S.extras, { includeRetired: true }).find((i) => i.id === f.itemId)?.text || f.itemId, h("div", { class: "muted" }, `${f.note} — ${f.byName}`)),
       h("td", {}, h("input", { type: "date", value: t.fixBy || "", onchange: (e) => save({ fixBy: e.target.value }) })),
       h("td", {}, h("input", { type: "checkbox", checked: !!t.closed, onchange: (e) => save({ closed: e.target.checked }) })),
       h("td", {}, h("input", { value: t.comment || "", placeholder: "Comment", onchange: (e) => save({ comment: e.target.value }) })));
@@ -292,9 +353,16 @@ function exportTab() {
     for (const a of AREAS) {
       for (const s of S.subs.filter((x) => x.areaId === a.id).sort((x, y) => x.revision - y.revision)) {
         const res = Object.fromEntries((await getDocs(collection(db, "submissions", s.id, "results"))).docs.map((d) => [d.id, d.data()]));
-        for (const i of a.items) {
+        const sup = Object.fromEntries((await getDocs(collection(db, "submissions", s.id, "supplements"))).docs.map((d) => [d.id, d.data()]));
+        for (const i of itemsFor(a.id, S.extras, { includeRetired: true })) {
+          if (i.extra && !i.active && !res[i.id] && !sup[i.id]) continue;
+          if (sup[i.id]) {
+            const r = sup[i.id];
+            lines.push([GROUPS.find((g) => g.id === a.group).name, a.name, s.revision, s.status, `[Added check] ${i.text}`, RESULT_LABEL[r.result], r.note || "", r.byName, fmt(r.at), r.certName, r.certRole, fmt(r.at)]);
+            continue;
+          }
           const r = res[i.id] || {};
-          lines.push([GROUPS.find((g) => g.id === a.group).name, a.name, s.revision, s.status, i.text, RESULT_LABEL[r.result] || "", r.note || "", r.byName || "", fmt(r.updatedAt), s.certName || "", s.certRole || "", fmt(s.submittedAt)]);
+          lines.push([GROUPS.find((g) => g.id === a.group).name, a.name, s.revision, s.status, (i.extra ? "[Added check] " : "") + i.text, RESULT_LABEL[r.result] || "", r.note || "", r.byName || "", fmt(r.updatedAt), s.certName || "", s.certRole || "", fmt(s.submittedAt)]);
         }
       }
     }
@@ -306,4 +374,52 @@ function exportTab() {
   render(nav(), h("div", { class: "card" },
     h("p", {}, "One row per checklist item per area revision, with notes, who checked it and the certification."), btn,
     h("p", { class: "muted small" }, "For a PDF of an area, open it from Progress and use Print / PDF. Photos can be downloaded in bulk from Firebase console → Storage.")));
+}
+
+// ---------- Checklist: add your own checks at any time ----------
+function checklistTab() {
+  const target = h("select", {},
+    h("optgroup", { label: "Several areas at once" }, ...TARGETS.map((t) => h("option", { value: t.id }, t.name))),
+    ...GROUPS.map((g) => h("optgroup", { label: g.name }, ...AREAS.filter((a) => a.group === g.id).map((a) => h("option", { value: a.id }, a.name)))));
+  const text = h("textarea", { rows: 2, placeholder: "e.g. Towel radiator heats up and has no leaks" });
+  const needNote = h("input", { type: "checkbox" });
+  const add = h("button", { class: "primary" }, "Add check");
+  add.addEventListener("click", async () => {
+    const t = text.value.trim();
+    if (t.length < 4) return toast("Describe the check first.");
+    const areas = areasForTarget(target.value);
+    if (!confirm(`Add this check to ${areas.length} area${areas.length > 1 ? "s" : ""}?`)) return;
+    add.disabled = true;
+    try {
+      const batch = writeBatch(db);
+      areas.forEach((a) => batch.set(doc(collection(db, "extraItems")), {
+        areaId: a.id, text: t, noteRequired: needNote.checked, active: true, createdAt: serverTimestamp(),
+      }));
+      await batch.commit();
+      text.value = ""; needNote.checked = false;
+      toast(`Added to ${areas.length} area${areas.length > 1 ? "s" : ""}.`);
+    } catch (e) { toast("Could not add: " + e.code); }
+    add.disabled = false;
+  });
+
+  const byArea = {};
+  S.extras.forEach((x) => (byArea[x.areaId] ||= []).push(x));
+  const list = AREAS.filter((a) => byArea[a.id]).map((a) => h("div", { class: "card" },
+    h("b", {}, a.name),
+    h("ul", {}, ...byArea[a.id].sort((x, y) => (x.createdAt?.seconds || 0) - (y.createdAt?.seconds || 0)).map((x) => h("li", { class: x.active ? "" : "muted" },
+      x.text, x.noteRequired ? " (note required)" : "", h("span", { class: "muted small" }, ` · added ${fmt(x.createdAt)}`),
+      x.active
+        ? h("button", { class: "link", onclick: async () => { if (confirm("Remove this check? Answers already given are kept.")) await updateDoc(doc(db, "extraItems", x.id), { active: false }); } }, " Remove")
+        : " · removed")))));
+
+  render(nav(),
+    h("div", { class: "card" },
+      h("h3", {}, "Add a check"),
+      h("p", { class: "muted small" }, "It appears straight away on the builders' phones. In areas not yet submitted it becomes part of the normal list. In areas already submitted it shows as a new check: the builders answer and certify it separately, and the original answers stay locked."),
+      h("label", {}, "Add to"), target,
+      h("label", {}, "Check"), text,
+      h("label", { class: "check" }, needNote, " Builder must write a note (e.g. a reading or count)"),
+      add),
+    h("h3", {}, `Checks you have added (${S.extras.filter((x) => x.active).length})`),
+    list.length ? h("div", {}, ...list) : h("p", { class: "muted" }, "None yet. The built-in checklist has " + AREAS.reduce((n, a) => n + a.items.length, 0) + " checks across " + AREAS.length + " areas."));
 }

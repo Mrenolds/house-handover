@@ -51,3 +51,11 @@ tr.defect td { background: #fff3f2; } tr.closed td { opacity: .55; }
   body { background: #fff; } #app { max-width: none; padding: 0; }
   .thumbs img { width: 120px; height: 120px; }
 }
+.b-new { background: #e9ddff; }
+.card.extra { border-left: 4px solid #8b6cd6; }
+.card.extra.done { border-left-color: var(--pass); }
+tr.todo td { background: #f4efff; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 8px 0 12px; }
+.stat { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.stat b { display: block; font-size: 1.4rem; } .stat span { color: var(--muted); font-size: .85rem; }
+details summary { cursor: pointer; font-weight: 600; }

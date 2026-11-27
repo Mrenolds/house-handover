@@ -74,4 +74,21 @@ export function statusBadge(status) {
   return h("span", { class: `badge b-${status}` }, label);
 }
 
+// Items for an area = the built-in checklist + checks the owner added later.
+// Extra checks carry extra: true and the time they were added.
+export function itemsFor(areaId, extras, { includeRetired = false } = {}) {
+  const base = (AREAS.find((a) => a.id === areaId)?.items || []).map((i) => ({ ...i }));
+  const more = extras
+    .filter((x) => x.areaId === areaId && (x.active || includeRetired))
+    .sort((a, b) => (a.createdAt?.seconds || 9e9) - (b.createdAt?.seconds || 9e9))
+    .map((x) => ({ id: x.id, text: x.text, noteRequired: !!x.noteRequired, extra: true, active: x.active, createdAt: x.createdAt }));
+  return [...base, ...more];
+}
+
+// Extra checks still to do on a submitted revision: not answered in it, not added since.
+export function outstandingExtras(areaId, extras, sub, resultIds, suppIds) {
+  if (!sub || sub.status !== "submitted") return [];
+  return extras.filter((x) => x.areaId === areaId && x.active && !resultIds.has(x.id) && !suppIds.has(x.id));
+}
+
 export { AREAS };

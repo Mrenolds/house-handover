@@ -76,7 +76,22 @@ After a minute the app is live at:
 
 Only someone signed into the Firebase console as project owner can bypass the rules, so protect that Google account with 2-step verification.
 
-## Changing the checklist
+## Adding checks later
+Use the **Checklist** tab on the dashboard. Pick one area or a group (every room, all bathrooms, all
+bedrooms, all closets, all terraces), type the check and press **Add check**. It appears on the builders'
+phones straight away:
+- in areas not yet submitted, it joins the normal list and must be answered before submitting;
+- in areas already submitted, it shows as a **new check**; builders answer and certify it separately and
+  the original answers stay locked. The dashboard counts these as "new checks to do" until done.
+Checks you add can be removed (retired) but never deleted; answers already given are kept.
+
+## Several people, one code word
+Everyone on the team can use the same code word at the same time on their own phones. Each person
+signs in with their own name, which is recorded on every answer, note, photo and certification. They all
+see the same room list and status, so two people can split the floors between them. The dashboard
+shows one combined picture, including a "Who did what" table.
+
+## Changing the built-in checklist
 Edit `js/checklist.js`. Rewording items is fine at any time. Do **not** change area or item ids, or
 `CHECKLIST_VERSION`, once builders have started — drafts are keyed on them. After editing, bump `CACHE`
 in `sw.js` (e.g. `handover-v2`) so phones pick up the new files.

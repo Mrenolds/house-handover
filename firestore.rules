@@ -114,6 +114,27 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // Answers to checks the owner added after this revision was submitted.
+      // One per check, written once with its own certification, never changed.
+      match /supplements/{itemId} {
+        allow read: if isOwner() || isBuilder();
+        allow create: if isBuilder()
+          && sub(sid).status == 'submitted'
+          && exists(/databases/$(database)/documents/extraItems/$(itemId))
+          && get(/databases/$(database)/documents/extraItems/$(itemId)).data.areaId == sub(sid).areaId
+          && !exists(/databases/$(database)/documents/submissions/$(sid)/results/$(itemId))
+          && request.resource.data.keys().hasOnly(['result', 'note', 'by', 'byName', 'certName', 'certRole', 'at'])
+          && request.resource.data.result in ['pass', 'defect', 'na']
+          && request.resource.data.note is string && request.resource.data.note.size() <= 2000
+          && (request.resource.data.result == 'pass' || request.resource.data.note.size() > 0)
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.byName == myName()
+          && request.resource.data.certName is string && request.resource.data.certName.size() >= 3
+          && request.resource.data.certRole is string && request.resource.data.certRole.size() >= 2
+          && request.resource.data.at == request.time;
+        allow update, delete: if false;
+      }
+
       // Notes added after submission: append-only.
       match /addenda/{aid} {
         allow read: if isOwner() || isBuilder();
@@ -142,6 +163,22 @@ service cloud.firestore {
           && request.resource.data.uploadedAt == request.time;
         allow update, delete: if false;
       }
+    }
+
+    // ---- Checks the owner adds later (shown to builders; never deleted, only retired) ----
+    match /extraItems/{xid} {
+      allow read: if isOwner() || isBuilder();
+      allow create: if isOwner()
+        && request.resource.data.keys().hasOnly(['areaId', 'text', 'noteRequired', 'active', 'createdAt'])
+        && request.resource.data.areaId is string
+        && request.resource.data.text is string && request.resource.data.text.size() >= 4 && request.resource.data.text.size() <= 500
+        && request.resource.data.noteRequired is bool
+        && request.resource.data.active == true
+        && request.resource.data.createdAt == request.time;
+      allow update: if isOwner()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active'])
+        && request.resource.data.active == false;
+      allow delete: if false;
     }
 
     // ---- Owner's records ----
