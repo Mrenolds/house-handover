@@ -5,11 +5,52 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex">
   <title>House handover</title>
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=13">
+  <!-- Every app file is loaded at the same version, so a phone can never mix old and new files. -->
+  <script type="importmap">
+  { "imports": {
+    "./js/builder.js": "./js/builder.js?v=13",
+    "./js/owner.js": "./js/owner.js?v=13",
+    "./js/common.js": "./js/common.js?v=13",
+    "./js/checklist.js": "./js/checklist.js?v=13",
+    "./js/config.js": "./js/config.js?v=13",
+    "./js/photos.js": "./js/photos.js?v=13"
+  } }
+  </script>
 </head>
 <body>
   <main id="app"><p class="muted">Loading…</p></main>
-  <script type="module" src="js/builder.js?v=12"></script>
+  <script>
+    // If the app hasn't started within 15 s, or a file fails to load, offer a clean reload
+    // instead of an endless "Loading…". Saved answers and photos waiting to upload are kept.
+    (function () {
+      function show(reason) {
+        var app = document.getElementById("app");
+        if (!app || !/Loading/.test(app.textContent) && !reason.force) return;
+        app.innerHTML = '<div class="card warn"><b>The app didn\'t start properly.</b>' +
+          '<p>This usually means an old copy of the app is stuck on this device or the connection is very slow. ' +
+          'Tap the button to reload a fresh copy. Your saved answers and any photos waiting to upload are kept.</p>' +
+          '<button class="primary" id="reset-btn">Reset and reload</button>' +
+          '<p class="muted small">' + (reason.msg || "") + '</p></div>';
+        document.getElementById("reset-btn").onclick = function () {
+          var jobs = [];
+          if (navigator.serviceWorker) jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); }));
+          if (window.caches) jobs.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); }));
+          Promise.all(jobs).catch(function () {}).then(function () { location.replace(location.pathname + "?r=" + Date.now()); });
+        };
+      }
+      window.__startTimer = setTimeout(function () { show({ msg: "Still loading after 15 seconds." }); }, 15000);
+      window.addEventListener("error", function (e) {
+        if (e.target && (e.target.tagName === "SCRIPT" || e.target.tagName === "LINK")) show({ msg: "A file didn't load." });
+        else if (e.message && /import|export|module/i.test(e.message)) show({ msg: e.message });
+      }, true);
+      window.addEventListener("unhandledrejection", function (e) {
+        var m = String(e.reason && (e.reason.message || e.reason));
+        if (/import|export|module|Failed to fetch dynamically/i.test(m)) show({ msg: m });
+      });
+    })();
+  </script>
+  <script type="module" src="js/builder.js?v=13"></script>
   <script>
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
   </script>

@@ -13,6 +13,7 @@ import { queuePhoto, onQueueChange, pendingCount, processQueue, localPhotos, set
 import { photoLink } from "./common.js";
 
 const root = document.getElementById("app");
+clearTimeout(window.__startTimer);  // the app started: no "didn't start" message
 const S = { session: null, subs: {}, unsub: [], codeExpires: null, extras: [], supp: {}, suppUnsub: {}, resIds: {}, resLoading: {} };
 
 function deviceId() {

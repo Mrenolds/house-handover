@@ -1,10 +1,9 @@
 // Keeps the builder app usable with no signal: app files and the Firebase
 // SDK are cached; data sync is handled by Firestore's own offline cache.
-const CACHE = "handover-v12";
-const APP = [
-  "./", "index.html", "css/style.css",
-  "js/builder.js", "js/common.js", "js/checklist.js", "js/config.js", "js/photos.js",
-];
+const CACHE = "handover-v13";
+// App files are requested with a version (?v=N) and cached under that exact address the
+// first time they load, so an old file can never be served for a new version.
+const APP = ["./", "index.html"];
 const SDK = "https://www.gstatic.com/firebasejs/11.0.2/";
 
 self.addEventListener("install", (e) => {
@@ -28,7 +27,8 @@ self.addEventListener("fetch", (e) => {
     return res;
   });
   e.respondWith((async () => {
-    const cached = await caches.match(e.request, { ignoreSearch: true });
+    // Pages may carry extra ?r=… after a reset; versioned files must match exactly.
+    const cached = await caches.match(e.request, { ignoreSearch: e.request.mode === "navigate" });
     if (!cached) return network;
     const timeout = new Promise((r) => setTimeout(() => r(cached), 2500));
     return Promise.race([network.catch(() => cached), timeout]);

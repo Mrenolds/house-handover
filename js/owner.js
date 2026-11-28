@@ -14,6 +14,7 @@ import { GROUPS, AREA_BY_ID, CHECKLIST_VERSION, TARGETS, areasForTarget } from "
 import { OWNER_EMAIL, CODE_VALID_DAYS } from "./config.js";
 
 const root = document.getElementById("app");
+clearTimeout(window.__startTimer);  // the app started: no "didn't start" message
 const S = { subs: [], latest: {}, reviews: {}, codes: [], extras: [], outstanding: {}, resultIds: {}, tab: "progress", unsub: [] };
 
 const WORDS = ("acorn amber anchor apple arrow aspen autumn badger bamboo banana basket beacon bear berry birch "
