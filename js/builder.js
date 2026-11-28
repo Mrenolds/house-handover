@@ -10,8 +10,7 @@ import {
 } from "./common.js";
 import { GROUPS, AREA_BY_ID, CHECKLIST_VERSION } from "./checklist.js";
 import { queuePhoto, onQueueChange, pendingCount, processQueue, localPhotos, setUploader } from "./photos.js";
-import { ref, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-storage.js";
-import { storage } from "./common.js";
+import { photoLink } from "./common.js";
 
 const root = document.getElementById("app");
 const S = { session: null, subs: {}, unsub: [], codeExpires: null, extras: [], supp: {}, suppUnsub: {}, resIds: {}, resLoading: {} };
@@ -31,6 +30,28 @@ function render(...nodes) {
   window.scrollTo(0, view === lastView ? y : 0);
   lastView = view;
 }
+// Live updates (teammates saving, photos finishing uploading) arrive in bursts: redraw
+// at most every 400 ms, and keep the page where it is, so it never looks like a reload.
+let drawTimer = null;
+function scheduleDraw() {
+  if (drawTimer) return;
+  drawTimer = setTimeout(() => {
+    drawTimer = null;
+    if (S.screen === "home") homeScreen(); else if (S.screen === "area") drawArea();
+  }, 400);
+}
+
+// Remember which room is open and how far down, so if the phone closes the tab (Android
+// often does this while the camera is open) the app comes back to the same place.
+function rememberPlace() {
+  if (S.screen === "area" && S.area) {
+    localStorage.setItem("hv-place", JSON.stringify({ areaId: S.area.areaId, y: window.scrollY, at: Date.now() }));
+  } else if (S.screen === "home") localStorage.removeItem("hv-place");
+}
+let placeTimer;
+window.addEventListener("scroll", () => { clearTimeout(placeTimer); placeTimer = setTimeout(rememberPlace, 300); }, { passive: true });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") rememberPlace(); });
+
 // Don't redraw under someone's fingers while they type a note.
 function typing() {
   const el = document.activeElement;
@@ -101,11 +122,20 @@ async function loadSession(user) {
   if (!S.extrasUnsub) {
     S.extrasUnsub = onSnapshot(collection(db, "extraItems"), (qs) => {
       S.extras = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
-      if (S.screen === "home") homeScreen(); else if (S.screen === "area") drawArea();
+      if (S.screen === "home") homeScreen(); else if (S.screen === "area") scheduleDraw();
     }, () => {});
   }
   startHome();
   setUploader(S.session.name);
+  // Back to the room they were in (within the last 2 hours), at the same spot.
+  try {
+    const place = JSON.parse(localStorage.getItem("hv-place") || "null");
+    if (place && Date.now() - place.at < 2 * 3600e3 && AREA_BY_ID[place.areaId]) {
+      openArea(place.areaId);
+      setTimeout(() => window.scrollTo(0, place.y), 600);
+      setTimeout(() => window.scrollTo(0, place.y), 1500);
+    }
+  } catch { /* ignore */ }
 }
 
 onAuthStateChanged(auth, async (user) => {
@@ -137,7 +167,7 @@ function watchSupp(sid) {
   if (S.suppUnsub[sid]) return;
   S.suppUnsub[sid] = onSnapshot(collection(db, "submissions", sid, "supplements"), (qs) => {
     S.supp[sid] = Object.fromEntries(qs.docs.map((d) => [d.id, d.data()]));
-    if (S.screen === "home") homeScreen(); else if (S.screen === "area") drawArea();
+    if (S.screen === "home") homeScreen(); else if (S.screen === "area") scheduleDraw();
   }, () => {});
 }
 // Which checks a submitted revision answered. Those answers never change, so load once,
@@ -220,27 +250,28 @@ function openArea(areaId) {
     S.subs = latestByArea(qs.docs.map((d) => ({ id: d.id, ...d.data() })));
     const cur = S.subs[areaId];
     if (cur && cur.revision !== S.area.rev) return openArea(areaId);
-    drawArea();
+    scheduleDraw();
   }, (err) => { if (err.code === "permission-denied" && navigator.onLine) expired(); }));
   S.unsub.push(onSnapshot(collection(db, "submissions", sid, "results"), { includeMetadataChanges: true }, (qs) => {
     S.area.results = Object.fromEntries(qs.docs.map((d) => [d.id, { ...d.data(), _pending: d.metadata.hasPendingWrites }]));
     S.area.resultsFromServer ||= !qs.metadata.fromCache;
-    drawArea();
+    scheduleDraw();
   }));
   S.unsub.push(onSnapshot(collection(db, "submissions", sid, "photos"), (qs) => {
     S.area.photoDocs = qs.docs.map((d) => ({ id: d.id, ...d.data() })).filter((p) => !p.removed);
     const counts = {};
     S.area.photoDocs.forEach((p) => { const k = p.itemId || "_"; counts[k] = (counts[k] || 0) + 1; });
     S.area.photos = counts;
-    drawArea();
+    scheduleDraw();
   }));
   S.unsub.push(onSnapshot(collection(db, "submissions", sid, "addenda"), (qs) => {
     S.area.addenda = qs.docs.map((d) => ({ id: d.id, ...d.data() }))
       .sort((a, b) => (a.createdAt?.seconds || 9e9) - (b.createdAt?.seconds || 9e9));
-    drawArea();
+    scheduleDraw();
   }));
   S.screen = "area";
   drawArea();
+  rememberPlace();
 }
 
 function curSub() { return S.subs[S.area.areaId]; }
@@ -257,12 +288,12 @@ function ensureSub() {
 function saveResult(item, result, note) {
   if (result !== "pass" && !note.trim()) {
     S.area.pendingNote[item.id] = result;
-    drawArea();
+    scheduleDraw();
     return toast(result === "defect" ? "Describe the defect in the note to save it." : "Give a short reason for N/A to save it.");
   }
   if (item.noteRequired && !note.trim()) {
     S.area.pendingNote[item.id] = result;
-    drawArea();
+    scheduleDraw();
     return toast("This item needs a note (e.g. the count or reading).");
   }
   delete S.area.pendingNote[item.id];
@@ -286,27 +317,19 @@ function photoButtons(itemId, addendumIdFn) {
       toast("Photo saved; it will upload when there is signal.");
       input.value = "";
     });
-    return h("label", { class: "btn small" }, label, input);
+    return h("label", { class: "btn small", onclick: rememberPlace }, label, input);
   };
   return [make("Take photo", true, "camera"), make("From gallery", false, "gallery")];
 }
 
 // Uploaded photos for a check, with Remove. Removing hides the photo; the owner can
 // still see what was removed and by whom.
-const urlCache = {};
 function photoStrip(itemId) {
   const list = (S.area.photoDocs || []).filter((p) => p.itemId === itemId && !p.addendumId);
   if (!list.length) return null;
-  return h("div", { class: "thumbs" }, ...list.map((p) => {
-    if (!(p.path in urlCache)) {
-      urlCache[p.path] = null;
-      getDownloadURL(ref(storage, p.path)).then((u) => { urlCache[p.path] = u; drawArea(); }).catch(() => { delete urlCache[p.path]; });
-    }
-    const u = urlCache[p.path];
-    return h("div", { class: "thumb" },
-      u ? h("a", { href: u, target: "_blank" }, h("img", { src: u, alt: "" })) : h("span", { class: "muted small" }, "loading…"),
-      h("button", { class: "link small", onclick: () => removePhoto(p) }, "Remove"));
-  }));
+  return h("div", { class: "thumbs" }, ...list.map((p) => h("div", { class: "thumb" },
+    photoLink(p.path),
+    h("button", { class: "link small", onclick: () => removePhoto(p) }, "Remove"))));
 }
 function removePhoto(p) {
   if (!confirm("Remove this photo? (To replace it, remove it and add a new one.)")) return;
@@ -370,7 +393,7 @@ function drawArea() {
   const all = itemsFor(a.id, S.extras, { includeRetired: true });
   // Active items, plus retired added checks that were already answered.
   const items = all.filter((i) => !i.extra || i.active || R[i.id] || supp[i.id]);
-  const back = () => { clearListeners(); startHome(); };
+  const back = () => { clearListeners(); S.screen = "home"; rememberPlace(); startHome(); };
   const reopenNote = sub?.reopenReason ? h("p", { class: "warn" }, `Reopened by the owner: ${sub.reopenReason}`,
     Object.values(R).some((r) => r.copiedFrom) ? h("div", { class: "small" }, "Earlier answers are filled in — change what needs fixing, then submit again.") : null) : null;
 

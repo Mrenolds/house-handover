@@ -3,7 +3,7 @@ import { getAuth } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
-import { getStorage } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-storage.js";
+import { getStorage, ref, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-storage.js";
 import { firebaseConfig } from "./config.js";
 import { AREAS } from "./checklist.js";
 
@@ -18,7 +18,7 @@ export const db = initializeFirestore(app, {
 export const storage = getStorage(app);
 
 // Shown in the page headers so you can tell which version is loaded.
-export const APP_VERSION = "1.10 (28 Nov)";
+export const APP_VERSION = "1.11 (28 Nov)";
 
 export const RESULT_LABEL = { pass: "Pass", defect: "Defect", na: "N/A" };
 
@@ -93,6 +93,37 @@ export function itemsFor(areaId, extras, { includeRetired = false } = {}) {
 export function outstandingItems(areaId, extras, sub, resultIds, suppIds) {
   if (!sub || sub.status !== "submitted") return [];
   return itemsFor(areaId, extras).filter((i) => !resultIds.has(i.id) && !suppIds.has(i.id));
+}
+
+// ---- Photos: each download link is fetched once, each <img> is built once and reused
+// on every redraw, and the small thumbnail is shown where one exists. ----
+const urlMemo = new Map();
+export function photoUrl(path) {
+  if (!urlMemo.has(path)) {
+    urlMemo.set(path, getDownloadURL(ref(storage, path)).catch(() => { urlMemo.delete(path); return null; }));
+  }
+  return urlMemo.get(path);
+}
+export const thumbPathOf = (path) => path.replace(/\.jpg$/, "_t.jpg");
+const linkMemo = new Map();
+// A link wrapping the photo. thumb: show the small version (falls back to full size for
+// photos taken before thumbnails existed). The link always opens the full-size photo.
+export function photoLink(path, { thumb = true, title = "" } = {}) {
+  const key = (thumb ? "t:" : "f:") + path;
+  if (linkMemo.has(key)) return linkMemo.get(key);
+  const img = document.createElement("img");
+  img.alt = ""; img.loading = "lazy"; if (title) img.title = title;
+  const a = document.createElement("a");
+  a.target = "_blank"; a.rel = "noopener"; a.append(img);
+  const full = photoUrl(path).then((u) => { if (u) a.href = u; return u; });
+  if (thumb) {
+    photoUrl(thumbPathOf(path)).then((u) => {
+      if (u) { img.onerror = () => { img.onerror = null; full.then((f) => { if (f) img.src = f; }); }; img.src = u; }
+      else full.then((f) => { if (f) img.src = f; });
+    });
+  } else full.then((f) => { if (f) img.src = f; });
+  linkMemo.set(key, a);
+  return a;
 }
 
 export { AREAS };

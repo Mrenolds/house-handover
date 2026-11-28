@@ -8,7 +8,7 @@ import {
 import { ref, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-storage.js";
 import {
   auth, db, storage, AREAS, h, toast, normCode, sha256, subId, latestByArea, fmt,
-  fingerprint, statusBadge, RESULT_LABEL, itemsFor, outstandingItems, APP_VERSION,
+  fingerprint, statusBadge, RESULT_LABEL, itemsFor, outstandingItems, APP_VERSION, photoLink,
 } from "./common.js";
 import { GROUPS, AREA_BY_ID, CHECKLIST_VERSION, TARGETS, areasForTarget } from "./checklist.js";
 import { OWNER_EMAIL, CODE_VALID_DAYS } from "./config.js";
@@ -62,14 +62,18 @@ function startOwner() {
     S.latest = latestByArea(S.subs);
     refreshOutstanding();
     if (S.tab === "progress") draw();
-    else if (S.tab === "detail" && S.detailArgs) detail(S.detailArgs[0]);
+    else if (S.tab === "detail" && S.detailArgs) {
+      // Only reload the open room if something in that room changed.
+      const sig = JSON.stringify(S.subs.filter((x) => x.areaId === S.detailArgs[0]).map((x) => [x.id, x.status, x.submittedAt?.seconds]));
+      if (sig !== S.detailSig) detail(S.detailArgs[0]);
+    }
   }, (e) => toast("Can't read data: " + e.code)));
   S.unsub.push(onSnapshot(collection(db, "reviews"), (qs) => {
     const m = {};
     qs.docs.map((d) => d.data()).sort((a, b) => (a.at?.seconds || 0) - (b.at?.seconds || 0)).forEach((r) => { m[r.submissionId] = r; });
     S.reviews = m;
     if (S.tab === "progress") draw();
-    else if (S.tab === "detail" && S.detailArgs) detail(...S.detailArgs);
+    else if (S.tab === "detail" && S.detailArgs && S.reviews[S.latest[S.detailArgs[0]]?.id] !== S.detailReview) detail(...S.detailArgs);
   }));
   S.unsub.push(onSnapshot(collection(db, "extraItems"), (qs) => {
     S.extras = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -184,12 +188,7 @@ async function loadSub(sid) {
     getDocs(collection(db, "submissions", sid, "supplements")),
     getDocs(collection(db, "submissions", sid, "history")),
   ]);
-  const photos = await Promise.all(ph.docs.map(async (d) => {
-    const p = d.data();
-    let url = null;
-    try { url = await getDownloadURL(ref(storage, p.path)); } catch { /* still uploading */ }
-    return { id: d.id, ...p, url };
-  }));
+  const photos = ph.docs.map((d) => ({ id: d.id, ...d.data() }));
   return {
     results: Object.fromEntries(res.docs.map((d) => [d.id, d.data()])),
     supp: Object.fromEntries(sp.docs.map((d) => [d.id, d.data()])),
@@ -200,13 +199,14 @@ async function loadSub(sid) {
   };
 }
 
-const thumbs = (list) => list.length ? h("div", { class: "thumbs" }, ...list.map((p) => p.url
-  ? h("a", { href: p.url, target: "_blank" }, h("img", { src: p.url, alt: "", loading: "lazy", title: `${p.byName} · ${p.source} · taken ${fmt(p.takenAt)}` }))
-  : h("span", { class: "muted small" }, "(uploading)"))) : null;
+const thumbs = (list) => list.length ? h("div", { class: "thumbs" },
+  ...list.map((p) => photoLink(p.path, { title: `${p.byName} · ${p.source} · taken ${fmt(p.takenAt)}` }))) : null;
 
 async function detail(areaId, rev) {
   S.tab = "detail";
   S.detailArgs = [areaId, rev];
+  S.detailSig = JSON.stringify(S.subs.filter((x) => x.areaId === areaId).map((x) => [x.id, x.status, x.submittedAt?.seconds]));
+  S.detailReview = S.reviews[S.latest[areaId]?.id];
   const a = AREA_BY_ID[areaId];
   const revs = S.subs.filter((s) => s.areaId === areaId).sort((x, y) => y.revision - x.revision);
   const sub = rev ? revs.find((s) => s.revision === rev) : revs[0];
@@ -356,12 +356,7 @@ async function defects() {
       getDocs(collection(db, "submissions", sid, "photos")),
       getDocs(collection(db, "submissions", sid, "addenda")),
     ]);
-    const photos = await Promise.all(ph.docs.map(async (d) => {
-      const p = d.data();
-      let url = null;
-      try { url = await getDownloadURL(ref(storage, p.path)); } catch { /* still uploading */ }
-      return { id: d.id, ...p, url };
-    }));
+    const photos = ph.docs.map((d) => ({ id: d.id, ...d.data() }));
     media[sid] = { photos: photos.filter((p) => !p.removed), addenda: ad.docs.map((d) => ({ id: d.id, ...d.data() })) };
   }));
   const track = {};
@@ -372,10 +367,8 @@ async function defects() {
   S.showClosed ??= false;
   const shown = found.filter((f) => S.showClosed || !isClosed(f));
 
-  const bigPhotos = (list) => list.length ? h("div", { class: "defect-photos" }, ...list.map((p) => p.url
-    ? h("figure", {}, h("a", { href: p.url, target: "_blank" }, h("img", { src: p.url, alt: "Defect photo" })),
-      h("figcaption", {}, `${p.byName} · taken ${fmt(p.takenAt)}`))
-    : h("p", { class: "muted small" }, "(photo still uploading)"))) : h("p", { class: "muted small" }, "No photo.");
+  const bigPhotos = (list) => list.length ? h("div", { class: "defect-photos" }, ...list.map((p) =>
+    h("figure", {}, photoLink(p.path, { thumb: false }), h("figcaption", {}, `${p.byName} · taken ${fmt(p.takenAt)}`)))) : h("p", { class: "muted small" }, "No photo.");
 
   const cards = shown.map((f, n) => {
     const key = `${f.sub.id}__${f.itemId}`;

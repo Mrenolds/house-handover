@@ -76,7 +76,12 @@ export async function processQueue() {
       const uid = auth.currentUser.uid;
       const path = `photos/${p.sid}/${uid}_${p.id}.jpg`;
       try {
-        await uploadBytes(ref(storage, path), p.blob, { contentType: "image/jpeg" });
+        // Small thumbnail first (about 15 KB) so lists load fast, then the full photo.
+        // Long cache lifetime: a photo never changes, so phones only download it once.
+        const meta = { contentType: "image/jpeg", cacheControl: "private, max-age=31536000" };
+        try { await uploadBytes(ref(storage, path.replace(/\.jpg$/, "_t.jpg")), await compress(p.blob, 360, 0.7), meta); }
+        catch (e) { if (e.code !== "storage/unauthorized") throw e; }
+        await uploadBytes(ref(storage, path), p.blob, meta);
       } catch (e) {
         // Already uploaded earlier (overwrite is not allowed) → just record metadata.
         if (e.code !== "storage/unauthorized") throw e;

@@ -1,6 +1,6 @@
 // Keeps the builder app usable with no signal: app files and the Firebase
 // SDK are cached; data sync is handled by Firestore's own offline cache.
-const CACHE = "handover-v11";
+const CACHE = "handover-v12";
 const APP = [
   "./", "index.html", "css/style.css",
   "js/builder.js", "js/common.js", "js/checklist.js", "js/config.js", "js/photos.js",
@@ -20,10 +20,17 @@ self.addEventListener("fetch", (e) => {
   const sameOrigin = url.startsWith(self.location.origin);
   if (!sameOrigin && !url.startsWith(SDK)) return; // Firebase API calls go straight to the network
   // Network first (so updates arrive), cache as fallback when offline.
-  // no-cache: always ask the server for the newest file (GitHub Pages otherwise lets
-  // browsers reuse files for 10 minutes); the cached copy is only used offline.
-  e.respondWith(fetch(e.request, { cache: "no-cache" }).then((res) => {
+  // Ask the server for the newest file (no-cache), but if the network is slow and the
+  // phone already has a copy, use that after 2.5 s; the fresh copy still updates the
+  // cache in the background for next time.
+  const network = fetch(e.request, { cache: "no-cache" }).then((res) => {
     if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); }
     return res;
-  }).catch(() => caches.match(e.request, { ignoreSearch: true })));
+  });
+  e.respondWith((async () => {
+    const cached = await caches.match(e.request, { ignoreSearch: true });
+    if (!cached) return network;
+    const timeout = new Promise((r) => setTimeout(() => r(cached), 2500));
+    return Promise.race([network.catch(() => cached), timeout]);
+  })());
 });
