@@ -287,7 +287,7 @@ function itemCard(item, { r, sel, canEdit, wanted, onPick, onNote, tag }) {
     onclick: () => onPick(val, note.value),
   }, RESULT_LABEL[val]);
   const pc = S.area.photos[item.id] || 0;
-  return h("div", { class: `card item${r?.result ? " done" : ""}${item.extra ? " extra" : ""}` },
+  return h("div", { id: `item-${item.id}`, class: `card item${r?.result ? " done" : ""}${item.extra ? " extra" : ""}` },
     item.extra ? h("span", { class: "badge b-new" }, tag || "Added by owner") : null,
     h("p", { class: "itext" }, item.text),
     h("div", { class: "row" }, btn("pass"), btn("defect"), btn("na")),
@@ -414,8 +414,19 @@ async function reviewScreen() {
   const certName = h("input", { value: S.session.name });
   const certRole = h("input", { placeholder: "e.g. Site engineer" });
   const tick = h("input", { type: "checkbox", id: "tick" });
-  const btn = h("button", { class: "primary", disabled: missing.length > 0 }, "Submit and lock this area");
+  const goTo = (id) => { S.screen = "area"; drawArea(); setTimeout(() => {
+    const el = document.getElementById(`item-${id}`);
+    if (el) { el.scrollIntoView({ block: "center" }); el.classList.add("flash"); }
+  }, 50); };
+  const errBox = h("div");
+  const showErr = (title, detail) => errBox.replaceChildren(h("div", { class: "card error" }, h("b", {}, title), h("p", {}, detail)));
+  const btn = h("button", { class: missing.length ? "primary blocked" : "primary" },
+    missing.length ? `Answer ${missing.length} more check${missing.length > 1 ? "s" : ""} before submitting` : "Submit and lock this area");
   btn.addEventListener("click", async () => {
+    if (missing.length) {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return toast("Tap a check in the orange list to jump to it.");
+    }
     if (!tick.checked) return toast("Tick the certification box.");
     if (certName.value.trim().length < 3 || certRole.value.trim().length < 2) return toast("Enter your name and role.");
     if (!navigator.onLine) return toast("Submitting needs signal. Your answers are saved; try again when online.");
@@ -435,14 +446,19 @@ async function reviewScreen() {
       toast("Submitted and locked.");
       S.screen = "area"; drawArea();
     } catch (e) {
-      toast(e.message === "timeout" ? "No response from the server; check signal and try again." : "Submit failed: " + (e.code || e.message));
+      if (e.message === "timeout") showErr("Not submitted: no response from the server.", "Your answers are safe on this phone. Check you have signal and tap Submit again.");
+      else if (e.code === "permission-denied") showErr("Not submitted: the app refused it.", "Either the code word has expired or been revoked, or this room was changed by someone else. Go back, open the room again and retry. If it keeps happening, send the owner a screenshot of this message. (permission-denied)");
+      else showErr("Not submitted.", `Please try again. If it keeps happening, send the owner a screenshot of this message. (${e.code || e.message})`);
       btn.disabled = false; btn.textContent = "Submit and lock this area";
     }
   });
   S.screen = "review";
   render(
     topBar(`Review: ${a.name}`, () => { S.screen = "area"; drawArea(); }),
-    missing.length ? h("div", { class: "card warn" }, h("b", {}, `${missing.length} item(s) not checked yet:`), h("ul", {}, ...missing.map((i) => h("li", {}, i.text)))) : null,
+    missing.length ? h("div", { class: "card warn" },
+      h("b", {}, `${missing.length} check${missing.length > 1 ? "s" : ""} still need an answer before you can submit. Tap one to go to it:`),
+      h("ul", {}, ...missing.map((i) => h("li", {}, h("button", { class: "link left", onclick: () => goTo(i.id) },
+        i.text, S.area.pendingNote[i.id] ? h("b", { class: "warn-text" }, ` — ${RESULT_LABEL[S.area.pendingNote[i.id]]} tapped, needs a note to save`) : ""))))) : null,
     h("div", { class: "card" },
       h("p", {}, `Pass: ${items.length - missing.length - defects.length - na.length} · Defect: ${defects.length} · N/A: ${na.length}`),
       defects.length ? h("ul", {}, ...defects.map((i) => h("li", {}, h("b", {}, "Defect: "), i.text, " — ", R[i.id].note))) : null,
@@ -452,7 +468,7 @@ async function reviewScreen() {
       h("label", {}, "Full name"), certName,
       h("label", {}, "Role"), certRole,
       h("p", { class: "warn" }, "Once submitted, this area is locked. You will only be able to add notes and photos."),
-      btn));
+      btn, errBox));
 }
 
 // ---------- Addenda (after submission) ----------

@@ -59,3 +59,8 @@ tr.todo td { background: #f4efff; }
 .stat { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
 .stat b { display: block; font-size: 1.4rem; } .stat span { color: var(--muted); font-size: .85rem; }
 details summary { cursor: pointer; font-weight: 600; }
+button.blocked { background: #8aa9c0; border-color: #8aa9c0; }
+button.link.left { text-align: left; padding: 6px 0; }
+.card.error { border: 2px solid var(--defect); background: #fff3f2; }
+.card.flash { animation: flash 1.6s ease-out; }
+@keyframes flash { 0% { box-shadow: 0 0 0 4px #f0b400; } 100% { box-shadow: 0 0 0 0 transparent; } }
