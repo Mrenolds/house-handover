@@ -2,7 +2,7 @@ import {
   signInAnonymously, signOut, onAuthStateChanged,
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
 import {
-  doc, collection, setDoc, updateDoc, getDoc, getDocsFromServer, onSnapshot, serverTimestamp,
+  doc, collection, setDoc, updateDoc, getDoc, getDocsFromServer, onSnapshot, serverTimestamp, writeBatch,
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
 import {
   auth, db, AREAS, h, toast, normCode, sha256, subId, latestByArea, fmt,
@@ -10,6 +10,8 @@ import {
 } from "./common.js";
 import { GROUPS, AREA_BY_ID, CHECKLIST_VERSION } from "./checklist.js";
 import { queuePhoto, onQueueChange, pendingCount, processQueue, localPhotos } from "./photos.js";
+import { ref, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-storage.js";
+import { storage } from "./common.js";
 
 const root = document.getElementById("app");
 const S = { session: null, subs: {}, unsub: [], codeExpires: null, extras: [], supp: {}, suppUnsub: {}, resIds: {}, resLoading: {} };
@@ -153,7 +155,7 @@ function newChecksCount(areaId) {
   if (!s || s.status !== "submitted") return 0;
   watchSupp(s.id);
   loadResIds(s.id);
-  if (!S.resIds[s.id] || !S.supp[s.id]) return 0;
+  if (!S.resIds[s.id] || !S.supp[s.id]) return null;  // not known yet
   return outstandingItems(areaId, S.extras, s, S.resIds[s.id], new Set(Object.keys(S.supp[s.id]))).length;
 }
 
@@ -175,21 +177,28 @@ function topBar(title, back) {
 function homeScreen() {
   S.screen = "home";
   if (typing()) { S.needsDraw = true; return; }
-  const done = AREAS.filter((a) => S.subs[a.id]?.status === "submitted").length;
-  const newTotal = AREAS.reduce((n, a) => n + newChecksCount(a.id), 0);
+  const todo = Object.fromEntries(AREAS.map((a) => [a.id, newChecksCount(a.id)]));
+  const state = (a) => {
+    const s = S.subs[a.id];
+    if (!s) return "none";
+    if (s.status !== "submitted") return "draft";
+    return todo[a.id] == null ? "submitted" : todo[a.id] ? "partial" : "complete";
+  };
+  const count = (k) => AREAS.filter((a) => state(a) === k).length;
   const groups = GROUPS.map((g) => h("section", {},
     h("h2", {}, g.name),
     ...AREAS.filter((a) => a.group === g.id).map((a) => {
       const s = S.subs[a.id];
-      const nc = newChecksCount(a.id);
+      const st = state(a);
       return h("button", { class: "area", onclick: () => openArea(a.id) },
         h("span", {}, a.name, a.size ? h("span", { class: "muted small" }, ` ${a.size} m²`) : "",
-          s?.status === "submitted" ? h("div", { class: "muted small" }, `by ${s.certName}, ${fmt(s.submittedAt)}`) : ""),
-        h("span", {}, statusBadge(s ? s.status : "none"), nc ? h("span", { class: "badge b-new" }, `${nc} new check${nc > 1 ? "s" : ""}`) : null));
+          s?.status === "submitted" ? h("div", { class: "muted small" }, `last submitted by ${s.certName}, ${fmt(s.submittedAt)}`) : ""),
+        h("span", {}, statusBadge(st), st === "partial" ? h("span", { class: "badge b-new" }, `${todo[a.id]} to do`) : null));
     })));
   render(topBar("House handover"),
-    h("p", { class: "muted" }, `${done} of ${AREAS.length} areas submitted. Open an area, check every item, then certify and submit it.`),
-    newTotal ? h("p", { class: "warn" }, `The owner has added ${newTotal} new check${newTotal > 1 ? "s" : ""} to areas already submitted. Open the areas marked "new checks".`) : null,
+    h("p", {}, h("b", {}, `${count("complete")} of ${AREAS.length} areas done`),
+      ` · ${count("partial")} part done · ${count("draft")} in progress · ${count("none")} not started`),
+    h("p", { class: "muted small" }, "Open an area, check items, then submit what you've done. You can come back to a room any time to do the rest."),
     ...groups,
     h("p", {}, h("button", { class: "link", onclick: () => { signOut(auth); } }, "Sign out"), h("span", { class: "muted small" }, `  · app v${APP_VERSION}`)));
 }
@@ -215,8 +224,9 @@ function openArea(areaId) {
     drawArea();
   }));
   S.unsub.push(onSnapshot(collection(db, "submissions", sid, "photos"), (qs) => {
+    S.area.photoDocs = qs.docs.map((d) => ({ id: d.id, ...d.data() })).filter((p) => !p.removed);
     const counts = {};
-    qs.docs.forEach((d) => { const k = d.data().itemId || "_"; counts[k] = (counts[k] || 0) + 1; });
+    S.area.photoDocs.forEach((p) => { const k = p.itemId || "_"; counts[k] = (counts[k] || 0) + 1; });
     S.area.photos = counts;
     drawArea();
   }));
@@ -263,8 +273,6 @@ function photoButtons(itemId, addendumIdFn) {
     const input = h("input", { type: "file", accept: "image/*", capture: capture ? "environment" : false, multiple: !capture, hidden: true });
     input.addEventListener("change", async () => {
       for (const f of input.files) {
-        // Locked area: photos only for a note, or for a new check the owner added.
-        if (!editable() && !addendumIdFn && !S.area.outstandingIds?.has(itemId)) continue;
         if (editable()) ensureSub();
         await queuePhoto({
           sid: S.area.sid, itemId, addendumId: addendumIdFn ? addendumIdFn() : "",
@@ -279,7 +287,31 @@ function photoButtons(itemId, addendumIdFn) {
   return [make("Take photo", true, "camera"), make("From gallery", false, "gallery")];
 }
 
-function itemCard(item, { r, sel, canEdit, wanted, onPick, onNote, tag }) {
+// Uploaded photos for a check, with Remove. Removing hides the photo; the owner can
+// still see what was removed and by whom.
+const urlCache = {};
+function photoStrip(itemId) {
+  const list = (S.area.photoDocs || []).filter((p) => p.itemId === itemId && !p.addendumId);
+  if (!list.length) return null;
+  return h("div", { class: "thumbs" }, ...list.map((p) => {
+    if (!(p.path in urlCache)) {
+      urlCache[p.path] = null;
+      getDownloadURL(ref(storage, p.path)).then((u) => { urlCache[p.path] = u; drawArea(); }).catch(() => { delete urlCache[p.path]; });
+    }
+    const u = urlCache[p.path];
+    return h("div", { class: "thumb" },
+      u ? h("a", { href: u, target: "_blank" }, h("img", { src: u, alt: "" })) : h("span", { class: "muted small" }, "loading…"),
+      h("button", { class: "link small", onclick: () => removePhoto(p) }, "Remove"));
+  }));
+}
+function removePhoto(p) {
+  if (!confirm("Remove this photo? (To replace it, remove it and add a new one.)")) return;
+  updateDoc(doc(db, "submissions", S.area.sid, "photos", p.id), {
+    removed: true, removedBy: S.session.uid, removedByName: S.session.name, removedAt: serverTimestamp(),
+  }).catch((e) => toast("Could not remove: " + e.code));
+}
+
+function itemCard(item, { r, sel, canEdit, wanted, onPick, onNote, tag, footer, actions, photos = true }) {
   const note = h("textarea", { rows: 2, placeholder: item.noteRequired ? "Required: record the count/reading" : "Note (required for Defect or N/A)", disabled: !canEdit }, r?.note || "");
   note.addEventListener("change", () => onNote(note.value));
   const btn = (val) => h("button", {
@@ -288,14 +320,39 @@ function itemCard(item, { r, sel, canEdit, wanted, onPick, onNote, tag }) {
   }, RESULT_LABEL[val]);
   const pc = S.area.photos[item.id] || 0;
   return h("div", { id: `item-${item.id}`, class: `card item${r?.result ? " done" : ""}${item.extra ? " extra" : ""}` },
-    item.extra ? h("span", { class: "badge b-new" }, tag || "Added by owner") : null,
+    (tag || item.extra) ? h("span", { class: "badge b-new" }, tag || "Added by owner") : null,
     h("p", { class: "itext" }, item.text),
     h("div", { class: "row" }, btn("pass"), btn("defect"), btn("na")),
     (canEdit || r?.note) ? note : null,
+    photos ? photoStrip(item.id) : null,
     h("div", { class: "row small muted" },
-      canEdit ? photoButtons(item.id) : null,
-      [pc ? `${pc} photo${pc > 1 ? "s" : ""} uploaded` : "", r?.byName ? `${r._pending ? "saved on phone" : "synced"} · ${r.byName}` : ""].filter(Boolean).join(" · "),
-      wanted ? h("b", { class: "warn-text" }, " · add a note to save") : ""));
+      photos ? photoButtons(item.id) : null,
+      [pc ? `${pc} photo${pc > 1 ? "s" : ""}` : "", r?.byName ? `${r._pending ? "saved on phone" : "synced"} · ${r.byName}` : ""].filter(Boolean).join(" · "),
+      wanted ? h("b", { class: "warn-text" }, " · add a note to save") : ""),
+    footer ? h("div", { class: "small muted" }, footer) : null,
+    actions ? h("div", { class: "row" }, ...actions) : null);
+}
+
+// Editing an answer that was already submitted: the change is saved together with a
+// history record (before → after, who, when) that the owner can see.
+function saveEdit(item, coll, cur, next) {
+  const note = (next.note || "").trim();
+  if ((next.result !== "pass" || item.noteRequired) && !note) return toast("Add a note — a Defect or N/A (or this check) needs one.");
+  if (next.result === cur.result && note === (cur.note || "")) { S.area.editing = null; return drawArea(); }
+  const hist = doc(collection(db, "submissions", S.area.sid, "history"));
+  const batch = writeBatch(db);
+  batch.set(hist, {
+    itemId: item.id, coll, before: { result: cur.result, note: cur.note || "" }, after: { result: next.result, note },
+    by: S.session.uid, byName: S.session.name, at: serverTimestamp(),
+  });
+  batch.update(doc(db, "submissions", S.area.sid, coll, item.id), {
+    result: next.result, note, editedAt: serverTimestamp(), editedBy: S.session.uid, editedByName: S.session.name,
+    edits: (cur.edits || 0) + 1, lastEditId: hist.id,
+  });
+  batch.commit().catch((e) => toast(e.code === "permission-denied" ? "Change not saved: your access may have ended." : "Change not saved: " + e.code));
+  S.area.editing = null;
+  toast("Change saved.");
+  drawArea();
 }
 
 function drawArea() {
@@ -309,46 +366,76 @@ function drawArea() {
   const all = itemsFor(a.id, S.extras, { includeRetired: true });
   // Active items, plus retired added checks that were already answered.
   const items = all.filter((i) => !i.extra || i.active || R[i.id] || supp[i.id]);
-  const inRev = canEdit ? items.filter((i) => !i.extra || i.active) : items.filter((i) => R[i.id]);
-  const answered = inRev.filter((i) => R[i.id]).length;
+  const back = () => { clearListeners(); startHome(); };
+  const reopenNote = sub?.reopenReason ? h("p", { class: "warn" }, `Reopened by the owner: ${sub.reopenReason}`,
+    Object.values(R).some((r) => r.copiedFrom) ? h("div", { class: "small" }, "Earlier answers are filled in — change what needs fixing, then submit again.") : null) : null;
 
-  const head = [
-    topBar(a.name, () => { clearListeners(); startHome(); }),
-    h("p", {}, statusBadge(sub ? sub.status : "none"), " ",
-      h("span", { class: "muted" }, `${answered}/${inRev.length} checked`, S.area.rev > 1 ? ` · revision ${S.area.rev}` : "")),
-  ];
-  if (sub?.reopenReason) head.push(h("p", { class: "warn" }, `Reopened by the owner: ${sub.reopenReason}`,
-    Object.values(R).some((r) => r.copiedFrom) ? h("div", { class: "small" }, "Earlier answers are filled in — change what needs fixing, then submit again.") : null));
-  if (!canEdit) head.push(h("p", { class: "ok" }, `Submitted ${fmt(sub.submittedAt)} by ${sub.certName} (${sub.certRole}). Locked — you can add notes and photos below.`));
+  // ----- Not submitted yet: everything editable -----
+  if (canEdit) {
+    const list = items.filter((i) => !i.extra || i.active);
+    const answered = list.filter((i) => R[i.id]).length;
+    const cards = list.map((item) => {
+      const wanted = S.area.pendingNote[item.id];
+      const r = R[item.id];
+      const sel = wanted || r?.result;
+      return itemCard(item, {
+        r, sel, canEdit: true, wanted,
+        onPick: (val, note) => saveResult(item, val, note),
+        onNote: (note) => { if (sel) saveResult(item, sel, note); },
+      });
+    });
+    return render(topBar(a.name, back),
+      h("p", {}, statusBadge(sub ? "draft" : "none"), " ",
+        h("span", { class: "muted" }, `${answered}/${list.length} checked`, S.area.rev > 1 ? ` · revision ${S.area.rev}` : "")),
+      reopenNote,
+      h("p", { class: "muted small" }, "You don't have to finish the room in one go: submit what you've done, and the rest stays open for later."),
+      ...cards,
+      h("div", { class: "sticky" }, h("button", { class: "primary", onclick: reviewScreen },
+        answered ? `Review and submit (${answered}/${list.length} done)` : `Review and submit (0/${list.length})`)));
+  }
 
-  const cards = inRev.map((item) => {
-    const wanted = S.area.pendingNote[item.id];
-    const r = R[item.id];
-    const sel = wanted || r?.result;
-    return itemCard(item, {
-      r, sel, canEdit, wanted,
-      onPick: (val, note) => saveResult(item, val, note),
-      onNote: (note) => { if (sel) saveResult(item, sel, note); },
+  // ----- Submitted (fully or partly): done checks locked, the rest still to do -----
+  // Only once the answers have come from the server, so nothing is wrongly shown as to-do.
+  const known = S.area.resultsFromServer || S.resIds[S.area.sid];
+  const outstanding = known
+    ? outstandingItems(a.id, S.extras, sub, S.resIds[S.area.sid] || new Set(Object.keys(R)), new Set(Object.keys(supp))) : [];
+  S.area.outstandingIds = new Set(outstanding.map((i) => i.id));
+  const done = items.filter((i) => R[i.id] || supp[i.id]);
+  const total = done.length + outstanding.length;
+  const doneCards = done.map((i) => {
+    const coll = R[i.id] ? "results" : "supplements";
+    const r = R[i.id] || supp[i.id];
+    const by = (supp[i.id] ? `Certified by ${supp[i.id].certName}, ${fmt(supp[i.id].at)}` : `Certified by ${sub.certName}, ${fmt(sub.submittedAt)}`)
+      + (r.edits ? ` · edited by ${r.editedByName}, ${fmt(r.editedAt)}${r.edits > 1 ? ` (${r.edits} changes)` : ""}` : "");
+    if (S.area.editing === i.id) {
+      const d = (S.area.editDraft ||= { result: r.result, note: r.note || "" });
+      return itemCard(i, {
+        r: { ...r, note: d.note }, sel: d.result, canEdit: true, tag: "Editing", footer: by,
+        onPick: (val, note) => { d.result = val; d.note = note; drawArea(); },
+        onNote: (note) => { d.note = note; },
+        actions: [
+          h("button", { class: "primary small-btn", onclick: () => saveEdit(i, coll, r, d) }, "Save change"),
+          h("button", { onclick: () => { S.area.editing = null; S.area.editDraft = null; drawArea(); } }, "Cancel"),
+        ],
+      });
+    }
+    return itemCard(i, {
+      r, sel: r.result, canEdit: false, tag: i.extra ? "Added by owner" : null, footer: by,
+      actions: [h("button", { class: "btn small", onclick: () => { S.area.editing = i.id; S.area.editDraft = null; drawArea(); } }, "Edit answer")],
     });
   });
-
-  const parts = [...head, ...cards];
-  if (!canEdit) {
-    // Only once the answers have come from the server, so nothing is wrongly shown as new.
-    const outstanding = (S.area.resultsFromServer || S.resIds[S.area.sid])
-      ? outstandingItems(a.id, S.extras, sub, S.resIds[S.area.sid] || new Set(Object.keys(R)), new Set(Object.keys(supp))) : [];
-    S.area.outstandingIds = new Set(outstanding.map((i) => i.id));
-    const answeredSupp = items.filter((i) => supp[i.id]);
-    if (answeredSupp.length) {
-      parts.push(h("h2", {}, "Added checks — certified"));
-      answeredSupp.forEach((i) => parts.push(itemCard(i, { r: supp[i.id], sel: supp[i.id].result, canEdit: false, tag: `Added check · certified by ${supp[i.id].certName}` })));
-    }
-    if (outstanding.length) parts.push(...newChecksSection(a, outstanding));
-    parts.push(addendaSection(a, items));
-  } else {
-    parts.push(h("div", { class: "sticky" }, h("button", { class: "primary", onclick: reviewScreen }, `Review and submit (${answered}/${inRev.length})`)));
-  }
-  render(...parts);
+  render(
+    topBar(a.name, back),
+    h("p", {}, statusBadge(outstanding.length ? "partial" : "complete"), " ",
+      h("span", { class: "muted" }, `${done.length} of ${total} checks done`, S.area.rev > 1 ? ` · revision ${S.area.rev}` : "")),
+    reopenNote,
+    h("p", { class: "ok" }, outstanding.length
+      ? `${done.length} checks are submitted. ${outstanding.length} still to do — answer them below whenever you're ready. Submitted answers can still be edited; every change is recorded.`
+      : `All checks in this room are done. You can still edit any answer or its photos; every change is recorded for the owner.`),
+    ...(outstanding.length ? newChecksSection(a, outstanding) : []),
+    h("details", { class: "done-list", open: S.area.doneOpen ?? !outstanding.length, ontoggle: (e) => { S.area.doneOpen = e.target.open; } },
+      h("summary", {}, `Done — submitted (${done.length})`), ...doneCards),
+    addendaSection(a, items));
 }
 
 // ---------- New checks added after an area was submitted ----------
@@ -357,8 +444,8 @@ function newChecksSection(a, outstanding) {
   const keep = () => localStorage.setItem(`supp-${S.area.sid}`, JSON.stringify(D));
   const cards = outstanding.map((item) => {
     const d = D[item.id] || {};
-    return itemCard({ id: item.id, text: item.text, noteRequired: !!item.noteRequired, extra: true }, {
-      r: d.result ? { result: d.result, note: d.note } : null, sel: d.result, canEdit: true, tag: "New check from the owner",
+    return itemCard({ id: item.id, text: item.text, noteRequired: !!item.noteRequired, extra: !!item.extra }, {
+      r: d.result ? { result: d.result, note: d.note } : null, sel: d.result, canEdit: true, tag: item.extra ? "Added by owner" : null,
       onPick: (val, note) => { D[item.id] = { result: val, note }; keep(); drawArea(); },
       onNote: (note) => { D[item.id] = { ...(D[item.id] || {}), note }; keep(); },
     });
@@ -366,16 +453,17 @@ function newChecksSection(a, outstanding) {
   const certName = h("input", { value: S.session.name });
   const certRole = h("input", { placeholder: "e.g. Site engineer" });
   const tick = h("input", { type: "checkbox" });
-  const btn = h("button", { class: "primary" }, "Certify and submit these checks");
+  const btn = h("button", { class: "primary" }, "Certify and submit the checks I've answered");
   btn.addEventListener("click", async () => {
     const ready = outstanding.filter((i) => D[i.id]?.result);
-    if (!ready.length) return toast("Answer at least one new check first.");
+    if (!ready.length) return toast("Answer at least one check first.");
     const bad = ready.find((i) => (D[i.id].result !== "pass" || i.noteRequired) && !(D[i.id].note || "").trim());
     if (bad) return toast(`Add a note for: ${bad.text.slice(0, 60)}`);
     if (!tick.checked) return toast("Tick the certification box.");
     if (certName.value.trim().length < 3 || certRole.value.trim().length < 2) return toast("Enter your name and role.");
     if (!navigator.onLine) return toast("Submitting needs signal. Your answers are kept on this phone.");
-    if (!confirm(`Submit ${ready.length} check(s)? They cannot be changed afterwards.`)) return;
+    const left = outstanding.length - ready.length;
+    if (!confirm(`Submit ${ready.length} check${ready.length > 1 ? "s" : ""}? They cannot be changed afterwards.${left ? ` The other ${left} stay open for later.` : ""}`)) return;
     btn.disabled = true; btn.textContent = "Submitting…";
     try {
       await Promise.race([
@@ -386,18 +474,18 @@ function newChecksSection(a, outstanding) {
         new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 30000)),
       ]);
       ready.forEach((i) => delete D[i.id]); keep();
-      toast("New checks submitted and locked.");
+      toast("Submitted and locked.");
     } catch (e) {
       toast(e.message === "timeout" ? "No response from the server; try again." : "Submit failed: " + (e.code || e.message));
-      btn.disabled = false; btn.textContent = "Certify and submit these checks";
+      btn.disabled = false; btn.textContent = "Certify and submit the checks I've answered";
     }
   });
   return [
-    h("h2", {}, `New checks from the owner (${outstanding.length})`),
-    h("p", { class: "muted" }, "These were added after this area was submitted. The original answers stay locked; answer these and certify them separately."),
+    h("h2", {}, `Still to do (${outstanding.length})`),
+    h("p", { class: "muted" }, "Answer any of these and submit them — you can do some now and the rest later. Answers here are kept on this phone until you submit."),
     ...cards,
     h("div", { class: "card" },
-      h("label", { class: "check" }, tick, " I personally carried out these new checks and the results recorded are accurate."),
+      h("label", { class: "check" }, tick, " I personally carried out the checks I've answered here and the results recorded are accurate."),
       h("label", {}, "Full name"), certName, h("label", {}, "Role"), certRole, btn),
   ];
 }
@@ -420,17 +508,19 @@ async function reviewScreen() {
   }, 50); };
   const errBox = h("div");
   const showErr = (title, detail) => errBox.replaceChildren(h("div", { class: "card error" }, h("b", {}, title), h("p", {}, detail)));
-  const btn = h("button", { class: missing.length ? "primary blocked" : "primary" },
-    missing.length ? `Answer ${missing.length} more check${missing.length > 1 ? "s" : ""} before submitting` : "Submit and lock this area");
+  const answered = items.length - missing.length;
+  const needNote = missing.filter((i) => S.area.pendingNote[i.id]);
+  const label = !answered ? "Answer at least one check first"
+    : missing.length ? `Submit the ${answered} check${answered > 1 ? "s" : ""} done so far` : "Submit and lock this area";
+  const btn = h("button", { class: answered ? "primary" : "primary blocked" }, label);
   btn.addEventListener("click", async () => {
-    if (missing.length) {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-      return toast("Tap a check in the orange list to jump to it.");
-    }
+    if (!answered) { S.screen = "area"; drawArea(); return toast("Answer at least one check, then submit."); }
     if (!tick.checked) return toast("Tick the certification box.");
     if (certName.value.trim().length < 3 || certRole.value.trim().length < 2) return toast("Enter your name and role.");
     if (!navigator.onLine) return toast("Submitting needs signal. Your answers are saved; try again when online.");
-    if (!confirm("Submit this area? It cannot be changed afterwards.")) return;
+    if (!confirm(missing.length
+      ? `Submit ${answered} check${answered > 1 ? "s" : ""}? They will be locked. The other ${missing.length} stay open — you can do them later.`
+      : "Submit this area? It cannot be changed afterwards.")) return;
     btn.disabled = true; btn.textContent = "Submitting…";
     const results = { ...S.area.results };  // every answer recorded in this revision
     try {
@@ -449,25 +539,29 @@ async function reviewScreen() {
       if (e.message === "timeout") showErr("Not submitted: no response from the server.", "Your answers are safe on this phone. Check you have signal and tap Submit again.");
       else if (e.code === "permission-denied") showErr("Not submitted: the app refused it.", "Either the code word has expired or been revoked, or this room was changed by someone else. Go back, open the room again and retry. If it keeps happening, send the owner a screenshot of this message. (permission-denied)");
       else showErr("Not submitted.", `Please try again. If it keeps happening, send the owner a screenshot of this message. (${e.code || e.message})`);
-      btn.disabled = false; btn.textContent = "Submit and lock this area";
+      btn.disabled = false; btn.textContent = label;
     }
   });
   S.screen = "review";
   render(
     topBar(`Review: ${a.name}`, () => { S.screen = "area"; drawArea(); }),
-    missing.length ? h("div", { class: "card warn" },
-      h("b", {}, `${missing.length} check${missing.length > 1 ? "s" : ""} still need an answer before you can submit. Tap one to go to it:`),
-      h("ul", {}, ...missing.map((i) => h("li", {}, h("button", { class: "link left", onclick: () => goTo(i.id) },
-        i.text, S.area.pendingNote[i.id] ? h("b", { class: "warn-text" }, ` — ${RESULT_LABEL[S.area.pendingNote[i.id]]} tapped, needs a note to save`) : ""))))) : null,
+    needNote.length ? h("div", { class: "card warn" },
+      h("b", {}, `${needNote.length} answer${needNote.length > 1 ? "s" : ""} not saved — a Defect or N/A needs a note. Tap to fix, or they'll stay open for later:`),
+      h("ul", {}, ...needNote.map((i) => h("li", {}, h("button", { class: "link left", onclick: () => goTo(i.id) }, i.text))))) : null,
+    missing.length ? h("details", { class: "card" },
+      h("summary", {}, `${missing.length} check${missing.length > 1 ? "s" : ""} not done yet — they stay open for later (tap to see)`),
+      h("ul", {}, ...missing.map((i) => h("li", {}, h("button", { class: "link left", onclick: () => goTo(i.id) }, i.text))))) : null,
     h("div", { class: "card" },
-      h("p", {}, `Pass: ${items.length - missing.length - defects.length - na.length} · Defect: ${defects.length} · N/A: ${na.length}`),
+      h("p", {}, h("b", {}, `${answered} of ${items.length} checks done. `), `Pass: ${answered - defects.length - na.length} · Defect: ${defects.length} · N/A: ${na.length}`),
       defects.length ? h("ul", {}, ...defects.map((i) => h("li", {}, h("b", {}, "Defect: "), i.text, " — ", R[i.id].note))) : null,
       local ? h("p", { class: "muted" }, `${local} photo(s) still uploading; they will attach automatically.`) : null),
     h("div", { class: "card" },
-      h("label", { class: "check" }, tick, " I personally carried out each check listed for this area and the results recorded are accurate."),
+      h("label", { class: "check" }, tick, " I personally carried out the checks I've answered for this area and the results recorded are accurate."),
       h("label", {}, "Full name"), certName,
       h("label", {}, "Role"), certRole,
-      h("p", { class: "warn" }, "Once submitted, this area is locked. You will only be able to add notes and photos."),
+      h("p", { class: "warn" }, missing.length
+        ? "The checks you've answered will be locked once submitted. The rest stay open: come back to this room any time to do them and submit again."
+        : "Once submitted, the checks are locked. You can still add notes and photos."),
       btn, errBox));
 }
 

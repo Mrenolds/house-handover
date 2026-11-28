@@ -64,3 +64,32 @@ button.link.left { text-align: left; padding: 6px 0; }
 .card.error { border: 2px solid var(--defect); background: #fff3f2; }
 .card.flash { animation: flash 1.6s ease-out; }
 @keyframes flash { 0% { box-shadow: 0 0 0 4px #f0b400; } 100% { box-shadow: 0 0 0 0 transparent; } }
+.b-partial { background: #ffe2b8; } .b-complete { background: #cdebd6; }
+details.done-list > summary { margin: 18px 0 6px; font-size: 1.05rem; }
+
+/* Defects list: large photos, one defect per block, print friendly */
+.defect-card .defect-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.defect-card .defect-head .badge { margin-left: auto; }
+.defect-card.closed { opacity: .65; }
+.defect-text { font-weight: 600; font-size: 1.05rem; }
+.defect-photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; margin: 8px 0; }
+.defect-photos figure { margin: 0; }
+.defect-photos img { width: 100%; height: auto; max-height: 520px; object-fit: contain; background: #f2f2f2; border-radius: 8px; display: block; }
+.defect-photos figcaption { font-size: .8rem; color: var(--muted); margin-top: 3px; }
+.later { border-top: 1px dashed var(--line); margin-top: 8px; padding-top: 6px; }
+.print-only { display: none; }
+@media print {
+  .print-only { display: block; }
+  .defect-card { break-inside: avoid; page-break-inside: avoid; border: 1px solid #999; }
+  .defect-photos { grid-template-columns: 1fr 1fr; }
+  .defect-photos img { max-height: 380px; }
+  .defect-card.closed { opacity: 1; }
+  a[href]::after { content: none; }
+}
+.thumb { display: flex; flex-direction: column; align-items: center; }
+.thumb img { width: 84px; height: 84px; object-fit: cover; border-radius: 6px; }
+button.small-btn { width: auto; padding: 10px 16px; margin-top: 0; }
+.removed img { opacity: .45; filter: grayscale(1); }
+.defect-photos:has(> figure:only-child) { grid-template-columns: 1fr; }
+.defect-photos:has(> figure:only-child) img { max-height: 640px; }
+@media print { .defect-photos:has(> figure:only-child) img { max-height: 560px; } }

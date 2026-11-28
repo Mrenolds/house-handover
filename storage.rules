@@ -20,7 +20,7 @@ service firebase.storage {
 
     // photos/<submission id>/<uid>_<photo id>.jpg
     match /photos/{sid}/{file} {
-      allow read: if isOwner();
+      allow read: if isOwner() || isBuilder();   // the team sees photos so they can manage them
       allow create: if isBuilder()
         && file.matches(request.auth.uid + '_.*[.]jpg')
         && request.resource.size < 3 * 1024 * 1024

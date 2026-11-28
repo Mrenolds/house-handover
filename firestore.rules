@@ -31,6 +31,23 @@ service cloud.firestore {
 
     function sub(sid) { return get(/databases/$(database)/documents/submissions/$(sid)).data; }
 
+    // Editing an answer after submission: only the answer and edit-tracking fields may
+    // change, and the same write must create the matching history record.
+    function validEdit(sid) {
+      let d = request.resource.data;
+      return isBuilder()
+        && sub(sid).status == 'submitted'
+        && d.diff(resource.data).affectedKeys().hasOnly(['result', 'note', 'editedAt', 'editedBy', 'editedByName', 'edits', 'lastEditId'])
+        && d.result in ['pass', 'defect', 'na']
+        && d.note is string && d.note.size() <= 2000
+        && (d.result == 'pass' || d.note.size() > 0)
+        && d.editedBy == request.auth.uid
+        && d.editedByName == myName()
+        && d.editedAt == request.time
+        && d.edits == resource.data.get('edits', 0) + 1
+        && existsAfter(/databases/$(database)/documents/submissions/$(sid)/history/$(d.lastEditId));
+    }
+
     // ---- Code words: owner only. Builders may look up one code by its hash
     // (they already know the code) to see its expiry date. ----
     match /codes/{h} {
@@ -111,6 +128,7 @@ service cloud.firestore {
           && request.resource.data.by == request.auth.uid
           && request.resource.data.byName == myName()
           && request.resource.data.updatedAt == request.time;
+        allow update: if validEdit(sid);
         allow delete: if false;
 
         // The owner undoing a submission copies its answers into the new draft
@@ -144,6 +162,19 @@ service cloud.firestore {
           && request.resource.data.certName is string && request.resource.data.certName.size() >= 3
           && request.resource.data.certRole is string && request.resource.data.certRole.size() >= 2
           && request.resource.data.at == request.time;
+        allow update: if validEdit(sid);
+        allow delete: if false;
+      }
+
+      // Change history for answers edited after submission: append-only.
+      match /history/{hid} {
+        allow read: if isOwner() || isBuilder();
+        allow create: if isBuilder()
+          && request.resource.data.keys().hasOnly(['itemId', 'coll', 'before', 'after', 'by', 'byName', 'at'])
+          && request.resource.data.coll in ['results', 'supplements']
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.byName == myName()
+          && request.resource.data.at == request.time;
         allow update, delete: if false;
       }
 
@@ -173,7 +204,14 @@ service cloud.firestore {
           && request.resource.data.byName == myName()
           && request.resource.data.source in ['camera', 'gallery']
           && request.resource.data.uploadedAt == request.time;
-        allow update, delete: if false;
+        // "Remove" hides a photo; the file and record stay for the owner.
+        allow update: if isBuilder()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['removed', 'removedBy', 'removedByName', 'removedAt'])
+          && request.resource.data.removed == true
+          && request.resource.data.removedBy == request.auth.uid
+          && request.resource.data.removedByName == myName()
+          && request.resource.data.removedAt == request.time;
+        allow delete: if false;
       }
     }
 

@@ -89,16 +89,20 @@ function refreshOutstanding() {
   clearTimeout(outTimer);
   outTimer = setTimeout(async () => {
     const out = {};
+    const later = [];
     await Promise.all(AREAS.map(async (a) => {
       const sub = S.latest[a.id];
       if (!sub || sub.status !== "submitted") return;
       // A submitted revision's answers never change, so cache them.
       S.resultIds[sub.id] ||= new Set((await getDocs(collection(db, "submissions", sub.id, "results"))).docs.map((d) => d.id));
-      const supp = new Set((await getDocs(collection(db, "submissions", sub.id, "supplements"))).docs.map((d) => d.id));
-      const list = outstandingItems(a.id, S.extras, sub, S.resultIds[sub.id], supp);
+      const suppDocs = (await getDocs(collection(db, "submissions", sub.id, "supplements"))).docs;
+      suppDocs.forEach((d) => later.push({ areaId: a.id, ...d.data() }));
+      const list = outstandingItems(a.id, S.extras, sub, S.resultIds[sub.id], new Set(suppDocs.map((d) => d.id)));
       if (list.length) out[a.id] = list;
     }));
     S.outstanding = out;
+    S.later = later;      // checks certified after an area's first submission
+    S.outReady = true;
     if (S.tab === "progress") draw();
   }, 400);
 }
@@ -121,7 +125,13 @@ function draw() {
 
 // ---------- Progress: one combined picture of everyone's work ----------
 function progress() {
-  const st = (a) => S.latest[a.id]?.status || "none";
+  const st = (a) => {
+    const s = S.latest[a.id];
+    if (!s) return "none";
+    if (s.status !== "submitted") return "draft";
+    if (!S.outReady) return "submitted";
+    return S.outstanding[a.id]?.length ? "partial" : "complete";
+  };
   const n = (k) => AREAS.filter((a) => st(a) === k).length;
   const accepted = AREAS.filter((a) => S.latest[a.id] && S.reviews[S.latest[a.id].id]?.decision === "accepted").length;
   const newChecks = Object.values(S.outstanding).reduce((t, l) => t + l.length, 0);
@@ -134,11 +144,20 @@ function progress() {
     t.roles.add(sub.certRole);
     if (!t.last || sub.submittedAt?.seconds > t.last.seconds) t.last = sub.submittedAt;
   }
+  // Batches submitted later on the same area (part-done rooms finished off, added checks).
+  for (const x of S.later || []) {
+    const t = (team[x.certName] ||= { areas: [], roles: new Set(), last: null });
+    const name = AREA_BY_ID[x.areaId]?.name + " (later checks)";
+    if (!t.areas.includes(name)) t.areas.push(name);
+    t.roles.add(x.certRole);
+    if (!t.last || x.at?.seconds > t.last.seconds) t.last = x.at;
+  }
   const stat = (label, val) => h("div", { class: "stat" }, h("b", {}, val), h("span", {}, label));
   render(nav(),
     h("div", { class: "stats" },
-      stat("submitted", `${n("submitted")} / ${AREAS.length}`), stat("in progress", n("draft")), stat("not started", n("none")),
-      stat("accepted by you", accepted), stat("new checks to do", newChecks)),
+      stat("fully done", `${n("complete")} / ${AREAS.length}`), stat("part done", n("partial") + n("submitted")),
+      stat("in progress, not submitted", n("draft")), stat("not started", n("none")),
+      stat("checks still to do in submitted rooms", newChecks), stat("accepted by you", accepted)),
     Object.keys(team).length ? h("details", { class: "card" }, h("summary", {}, `Who did what (${Object.keys(team).length} people)`),
       h("table", {}, h("thead", {}, h("tr", {}, ...["Certified by", "Role", "Areas", "Last submitted"].map((x) => h("th", {}, x)))),
         h("tbody", {}, ...Object.entries(team).sort((x, y) => y[1].areas.length - x[1].areas.length).map(([name, t]) =>
@@ -151,18 +170,19 @@ function progress() {
         return h("button", { class: "area", onclick: () => detail(a.id) },
           h("span", {}, a.name, s?.revision > 1 ? h("span", { class: "muted small" }, ` rev ${s.revision}`) : "",
             s?.status === "submitted" ? h("div", { class: "muted small" }, `by ${s.certName} (${s.certRole}), ${fmt(s.submittedAt)}`) : ""),
-          h("span", {}, statusBadge(s ? s.status : "none"),
+          h("span", {}, statusBadge(st(a)),
             rv?.decision === "accepted" ? h("span", { class: "badge b-accepted" }, "Accepted") : null,
-            nc ? h("span", { class: "badge b-new" }, `${nc} new check${nc > 1 ? "s" : ""} to do`) : null));
+            nc ? h("span", { class: "badge b-new" }, `${nc} to do`) : null));
       }))));
 }
 
 async function loadSub(sid) {
-  const [res, ph, ad, sp] = await Promise.all([
+  const [res, ph, ad, sp, hi] = await Promise.all([
     getDocs(collection(db, "submissions", sid, "results")),
     getDocs(collection(db, "submissions", sid, "photos")),
     getDocs(collection(db, "submissions", sid, "addenda")),
     getDocs(collection(db, "submissions", sid, "supplements")),
+    getDocs(collection(db, "submissions", sid, "history")),
   ]);
   const photos = await Promise.all(ph.docs.map(async (d) => {
     const p = d.data();
@@ -173,7 +193,9 @@ async function loadSub(sid) {
   return {
     results: Object.fromEntries(res.docs.map((d) => [d.id, d.data()])),
     supp: Object.fromEntries(sp.docs.map((d) => [d.id, d.data()])),
-    photos,
+    photos: photos.filter((p) => !p.removed),
+    removedPhotos: photos.filter((p) => p.removed),
+    history: hi.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.at?.seconds || 9e9) - (b.at?.seconds || 9e9)),
     addenda: ad.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0)),
   };
 }
@@ -192,7 +214,16 @@ async function detail(areaId, rev) {
   if (!sub) return render(nav(), back, h("h2", {}, a.name), h("p", {}, "Not started."));
   render(nav(), back, h("h2", {}, a.name), h("p", { class: "muted" }, "Loading…"));
   const data = await loadSub(sub.id);
-  const fpOk = sub.status === "submitted" ? (await fingerprint(areaId, sub.revision, data.results)) === sub.fingerprint : null;
+  // Check the fingerprint against the answers as certified: undo any later edits using
+  // the change history (the earliest "before" of each edited answer).
+  const original = Object.fromEntries(Object.entries(data.results).map(([k, v]) => [k, { ...v }]));
+  for (const hst of data.history) {
+    if (hst.coll === "results" && original[hst.itemId] && !original[hst.itemId]._restored) {
+      Object.assign(original[hst.itemId], hst.before, { _restored: true });
+    }
+  }
+  const fpOk = sub.status === "submitted" ? (await fingerprint(areaId, sub.revision, original)) === sub.fingerprint : null;
+  const itemText = (id) => itemsFor(areaId, S.extras, { includeRetired: true }).find((i) => i.id === id)?.text || id;
   const review = S.reviews[sub.id];
   const isLatest = sub.revision === revs[0].revision;
 
@@ -209,7 +240,8 @@ async function detail(areaId, rev) {
         h("td", {}, (i.extra || sp || todo) ? h("span", { class: "badge b-new" }, sp ? "Added check" : i.extra ? "Added by you" : "New check") : null, " ", i.text),
         h("td", {}, x ? RESULT_LABEL[x.result] : todo ? "To do" : "—"),
         h("td", {}, x?.note || "", thumbs(data.photos.filter((p) => p.itemId === i.id && !p.addendumId))),
-        h("td", { class: "small muted" }, r ? `${r.byName}, ${fmt(r.updatedAt)}` : sp ? `${sp.byName}, ${fmt(sp.at)} — certified by ${sp.certName} (${sp.certRole})` : ""));
+        h("td", { class: "small muted" }, r ? `${r.byName}, ${fmt(r.updatedAt)}` : sp ? `${sp.byName}, ${fmt(sp.at)} — certified by ${sp.certName} (${sp.certRole})` : "",
+          x?.edits ? h("div", { class: "warn-text" }, `Edited by ${x.editedByName}, ${fmt(x.editedAt)}${x.edits > 1 ? ` (${x.edits} changes)` : ""}`) : null));
     });
 
   const actions = h("div", { class: "row noprint" },
@@ -225,15 +257,29 @@ async function detail(areaId, rev) {
 
   render(nav(), back,
     h("h2", {}, a.name, ` — revision ${sub.revision}`),
-    h("p", {}, statusBadge(sub.status), review ? h("span", { class: `badge b-${review.decision}` }, review.decision) : null),
+    h("p", {}, statusBadge(sub.status !== "submitted" ? "draft" : !isLatest ? "submitted" : S.outstanding[areaId]?.length ? "partial" : "complete"),
+      isLatest && S.outstanding[areaId]?.length ? h("span", { class: "badge b-new" }, `${S.outstanding[areaId].length} to do`) : null, review ? h("span", { class: `badge b-${review.decision}` }, review.decision) : null),
     sub.reopenReason ? h("p", { class: "warn" }, `Reopened ${fmt(sub.reopenedAt)}: ${sub.reopenReason}`) : null,
     sub.status === "submitted" ? h("div", { class: "card" },
       h("p", {}, h("b", {}, "Certified by: "), `${sub.certName} (${sub.certRole}), signed in as ${sub.submittedByName}, ${fmt(sub.submittedAt)}`),
       h("p", { class: "small" }, "Fingerprint ", h("code", {}, (sub.fingerprint || "").slice(0, 16) + "…"), " ",
-        fpOk ? h("span", { class: "ok-text" }, "matches the recorded answers") : h("span", { class: "warn-text" }, "does NOT match — answers differ from what was certified")),
+        fpOk ? h("span", { class: "ok-text" }, "matches the answers as certified") : h("span", { class: "warn-text" }, "does NOT match — the recorded answers differ from what was certified"),
+        data.history.length ? h("span", {}, ` · ${data.history.length} change${data.history.length > 1 ? "s" : ""} made since — see Change history below`) : null),
       review?.comment ? h("p", {}, h("b", {}, "Your comment: "), review.comment) : null) : null,
     actions,
     h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Check"), h("th", {}, "Result"), h("th", {}, "Note / photos"), h("th", {}, "By"))), h("tbody", {}, ...rows)),
+    h("h3", {}, "Change history"),
+    data.history.length || data.removedPhotos.length
+      ? h("table", {}, h("thead", {}, h("tr", {}, ...["When", "Who", "Check", "Before", "After"].map((x) => h("th", {}, x)))),
+        h("tbody", {},
+          ...data.history.map((x) => h("tr", {},
+            h("td", { class: "small" }, fmt(x.at)), h("td", {}, x.byName), h("td", {}, itemText(x.itemId)),
+            h("td", {}, RESULT_LABEL[x.before.result], x.before.note ? h("div", { class: "muted small" }, x.before.note) : null),
+            h("td", {}, RESULT_LABEL[x.after.result], x.after.note ? h("div", { class: "muted small" }, x.after.note) : null))),
+          ...data.removedPhotos.map((p) => h("tr", {},
+            h("td", { class: "small" }, fmt(p.removedAt)), h("td", {}, p.removedByName), h("td", {}, p.itemId ? itemText(p.itemId) : "Photo on a note"),
+            h("td", {}, h("div", { class: "removed" }, thumbs([p]))), h("td", {}, "Photo removed")))))
+      : h("p", { class: "muted" }, "No changes since submission."),
     h("h3", {}, "Added after submission"),
     data.addenda.length || data.photos.some((p) => p.addendumId)
       ? h("div", {}, ...data.addenda.map((ad) => h("div", { class: "card small" },
@@ -293,36 +339,77 @@ async function reopen(sub, keep) {
 
 // ---------- Defects ----------
 async function defects() {
-  render(nav(), h("p", { class: "muted" }, "Loading defects…"));
+  render(nav(), h("p", { class: "muted" }, "Loading defects and photos…"));
   // Latest submitted revision per area (a reopened draft keeps showing the last certified defects).
   const latest = Object.values(latestByArea(S.subs.filter((x) => x.status === "submitted")));
   const found = [];
   await Promise.all(latest.map(async (s) => {
     for (const coll of ["results", "supplements"]) {
       const qs = await getDocs(query(collection(db, "submissions", s.id, coll), where("result", "==", "defect")));
-      qs.docs.forEach((d) => found.push({ sub: s, itemId: d.id, ...d.data() }));
+      qs.docs.forEach((d) => found.push({ sub: s, itemId: d.id, ...d.data(), when: d.data().updatedAt || d.data().at }));
     }
+  }));
+  // Photos and later notes for the rooms that have defects.
+  const media = {};
+  await Promise.all([...new Set(found.map((f) => f.sub.id))].map(async (sid) => {
+    const [ph, ad] = await Promise.all([
+      getDocs(collection(db, "submissions", sid, "photos")),
+      getDocs(collection(db, "submissions", sid, "addenda")),
+    ]);
+    const photos = await Promise.all(ph.docs.map(async (d) => {
+      const p = d.data();
+      let url = null;
+      try { url = await getDownloadURL(ref(storage, p.path)); } catch { /* still uploading */ }
+      return { id: d.id, ...p, url };
+    }));
+    media[sid] = { photos: photos.filter((p) => !p.removed), addenda: ad.docs.map((d) => ({ id: d.id, ...d.data() })) };
   }));
   const track = {};
   (await getDocs(collection(db, "defects"))).docs.forEach((d) => { track[d.id] = d.data(); });
   found.sort((x, y) => AREAS.indexOf(AREA_BY_ID[x.sub.areaId]) - AREAS.indexOf(AREA_BY_ID[y.sub.areaId]));
-  const open = found.filter((f) => !track[`${f.sub.id}__${f.itemId}`]?.closed).length;
-  const rows = found.map((f, n) => {
+  const isClosed = (f) => !!track[`${f.sub.id}__${f.itemId}`]?.closed;
+  const open = found.filter((f) => !isClosed(f)).length;
+  S.showClosed ??= false;
+  const shown = found.filter((f) => S.showClosed || !isClosed(f));
+
+  const bigPhotos = (list) => list.length ? h("div", { class: "defect-photos" }, ...list.map((p) => p.url
+    ? h("figure", {}, h("a", { href: p.url, target: "_blank" }, h("img", { src: p.url, alt: "Defect photo" })),
+      h("figcaption", {}, `${p.byName} · taken ${fmt(p.takenAt)}`))
+    : h("p", { class: "muted small" }, "(photo still uploading)"))) : h("p", { class: "muted small" }, "No photo.");
+
+  const cards = shown.map((f, n) => {
     const key = `${f.sub.id}__${f.itemId}`;
     const t = track[key] || {};
     const a = AREA_BY_ID[f.sub.areaId];
+    const m = media[f.sub.id] || { photos: [], addenda: [] };
+    const text = itemsFor(a.id, S.extras, { includeRetired: true }).find((i) => i.id === f.itemId)?.text || f.itemId;
+    const later = m.addenda.filter((ad) => ad.itemId === f.itemId).sort((x, y) => (x.createdAt?.seconds || 0) - (y.createdAt?.seconds || 0));
     const save = (patch) => setDoc(doc(db, "defects", key), { ...patch, updatedAt: serverTimestamp() }, { merge: true }).catch((e) => toast(e.code));
-    return h("tr", { class: t.closed ? "closed" : "" },
-      h("td", {}, n + 1),
-      h("td", {}, h("button", { class: "link", onclick: () => detail(a.id, f.sub.revision) }, a.name)),
-      h("td", {}, itemsFor(a.id, S.extras, { includeRetired: true }).find((i) => i.id === f.itemId)?.text || f.itemId, h("div", { class: "muted" }, `${f.note} — ${f.byName}`)),
-      h("td", {}, h("input", { type: "date", value: t.fixBy || "", onchange: (e) => save({ fixBy: e.target.value }) })),
-      h("td", {}, h("input", { type: "checkbox", checked: !!t.closed, onchange: (e) => save({ closed: e.target.checked }) })),
-      h("td", {}, h("input", { value: t.comment || "", placeholder: "Comment", onchange: (e) => save({ comment: e.target.value }) })));
+    return h("div", { class: `card defect-card${t.closed ? " closed" : ""}` },
+      h("div", { class: "defect-head" },
+        h("b", {}, `${n + 1}. ${a.name}`), h("span", { class: "muted small" }, ` · ${GROUPS.find((g) => g.id === a.group).name}`),
+        h("span", { class: `badge ${t.closed ? "b-complete" : "b-reopened"}` }, t.closed ? "Closed" : "Open")),
+      h("p", { class: "defect-text" }, text),
+      h("p", {}, h("b", {}, "Builder's note: "), f.note, h("span", { class: "muted small" }, ` — ${f.byName}, ${fmt(f.when)}`),
+        f.edits ? h("span", { class: "warn-text small" }, ` · edited by ${f.editedByName}, ${fmt(f.editedAt)}`) : null),
+      bigPhotos(m.photos.filter((p) => p.itemId === f.itemId && !p.addendumId)),
+      ...later.map((ad) => h("div", { class: "later" },
+        h("p", {}, h("b", {}, "Later note: "), ad.text, h("span", { class: "muted small" }, ` — ${ad.byName}, ${fmt(ad.createdAt)}`)),
+        bigPhotos(m.photos.filter((p) => p.addendumId === ad.id)))),
+      h("p", { class: "print-only" }, `Fix by: ${t.fixBy || "—"} · ${t.closed ? "Closed" : "Open"}${t.comment ? ` · ${t.comment}` : ""}`),
+      h("div", { class: "row noprint" },
+        h("label", {}, "Fix by ", h("input", { type: "date", value: t.fixBy || "", onchange: (e) => save({ fixBy: e.target.value }) })),
+        h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!t.closed, onchange: (e) => save({ closed: e.target.checked }).then(defects) }), " Closed"),
+        h("input", { value: t.comment || "", placeholder: "Comment", onchange: (e) => save({ comment: e.target.value }) })));
   });
+
   render(nav(),
-    h("p", {}, `${found.length} defects recorded, ${open} open.`),
-    h("table", {}, h("thead", {}, h("tr", {}, ...["#", "Area", "Defect", "Fix by", "Closed", "Comment"].map((x) => h("th", {}, x)))), h("tbody", {}, ...rows)));
+    h("div", { class: "row noprint" },
+      h("p", {}, `${found.length} defects recorded, ${open} open.`),
+      h("label", { class: "check" }, h("input", { type: "checkbox", checked: S.showClosed, onchange: (e) => { S.showClosed = e.target.checked; defects(); } }), " Show closed"),
+      h("button", { onclick: () => window.print() }, "Print / PDF")),
+    h("h2", { class: "print-only" }, `Defects list — ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })} — ${S.showClosed ? "all" : "open"} defects (${shown.length})`),
+    ...(shown.length ? cards : [h("p", { class: "muted" }, found.length ? "No open defects." : "No defects recorded.")]));
 }
 
 // ---------- Code word ----------

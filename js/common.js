@@ -18,7 +18,7 @@ export const db = initializeFirestore(app, {
 export const storage = getStorage(app);
 
 // Shown in the page headers so you can tell which version is loaded.
-export const APP_VERSION = "1.7 (28 Nov)";
+export const APP_VERSION = "1.8 (28 Nov)";
 
 export const RESULT_LABEL = { pass: "Pass", defect: "Defect", na: "N/A" };
 
@@ -73,7 +73,7 @@ export function toast(msg, ms = 3500) {
 }
 
 export function statusBadge(status) {
-  const label = { none: "Not started", draft: "In progress", submitted: "Submitted" }[status] || status;
+  const label = { none: "Not started", draft: "In progress", submitted: "Submitted", partial: "Part done", complete: "Done" }[status] || status;
   return h("span", { class: `badge b-${status}` }, label);
 }
 
