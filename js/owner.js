@@ -181,16 +181,28 @@ function progress() {
       }))));
 }
 
+// Read one part of a room. If Firebase refuses or fails, carry on with the rest and
+// remember what was missing so the page can say so (instead of "Loading…" forever).
+const PART_NAMES = { results: "answers", photos: "photos", addenda: "notes", supplements: "later checks", history: "change history" };
+async function readPart(sid, part, problems) {
+  try {
+    return await Promise.race([
+      getDocs(collection(db, "submissions", sid, part)),
+      new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error("timeout"), { code: "timeout" })), 20000)),
+    ]);
+  } catch (e) {
+    problems.push(`${PART_NAMES[part]} (${e.code || e.message})`);
+    return { docs: [] };
+  }
+}
+
 async function loadSub(sid) {
-  const [res, ph, ad, sp, hi] = await Promise.all([
-    getDocs(collection(db, "submissions", sid, "results")),
-    getDocs(collection(db, "submissions", sid, "photos")),
-    getDocs(collection(db, "submissions", sid, "addenda")),
-    getDocs(collection(db, "submissions", sid, "supplements")),
-    getDocs(collection(db, "submissions", sid, "history")),
-  ]);
+  const problems = [];
+  const [res, ph, ad, sp, hi] = await Promise.all(
+    ["results", "photos", "addenda", "supplements", "history"].map((part) => readPart(sid, part, problems)));
   const photos = ph.docs.map((d) => ({ id: d.id, ...d.data() }));
   return {
+    problems,
     results: Object.fromEntries(res.docs.map((d) => [d.id, d.data()])),
     supp: Object.fromEntries(sp.docs.map((d) => [d.id, d.data()])),
     photos: photos.filter((p) => !p.removed),
@@ -204,6 +216,15 @@ const thumbs = (list) => list.length ? h("div", { class: "thumbs" },
   ...list.map((p) => photoLink(p.path, { title: `${p.byName} · ${p.source} · taken ${fmt(p.takenAt)}` }))) : null;
 
 async function detail(areaId, rev) {
+  try { await detailInner(areaId, rev); } catch (e) {
+    console.error(e);
+    render(nav(), h("button", { class: "link noprint", onclick: () => { S.tab = "progress"; draw(); } }, "‹ Back"),
+      h("div", { class: "card error" }, h("b", {}, "This room couldn't be shown."),
+        h("p", {}, `${e.code || e.message}. Reload the page; if it keeps happening, send Claude a screenshot.`)));
+  }
+}
+
+async function detailInner(areaId, rev) {
   S.tab = "detail";
   S.detailArgs = [areaId, rev];
   S.detailSig = JSON.stringify(S.subs.filter((x) => x.areaId === areaId).map((x) => [x.id, x.status, x.submittedAt?.seconds]));
@@ -258,6 +279,11 @@ async function detail(areaId, rev) {
 
   render(nav(), back,
     h("h2", {}, a.name, ` — revision ${sub.revision}`),
+    data.problems.length ? h("div", { class: "card error" },
+      h("b", {}, `Some of this room couldn't be loaded: ${data.problems.join(", ")}.`),
+      h("p", {}, /permission-denied/.test(data.problems.join())
+        ? "Firebase refused it, which almost always means the latest security rules haven't been published. Copy firestore.rules from GitHub into Firestore Database → Rules and click Publish (and storage.rules into Storage → Rules), then reload this page."
+        : "Check your connection and reload the page.")) : null,
     h("p", {}, statusBadge(sub.status !== "submitted" ? "draft" : !isLatest ? "submitted" : S.outstanding[areaId]?.length ? "partial" : "complete"),
       isLatest && S.outstanding[areaId]?.length ? h("span", { class: "badge b-new" }, `${S.outstanding[areaId].length} to do`) : null, review ? h("span", { class: `badge b-${review.decision}` }, review.decision) : null),
     sub.reopenReason ? h("p", { class: "warn" }, `Reopened ${fmt(sub.reopenedAt)}: ${sub.reopenReason}`) : null,
@@ -340,6 +366,16 @@ async function reopen(sub, keep) {
 
 // ---------- Defects ----------
 async function defects() {
+  try { await defectsInner(); } catch (e) {
+    console.error(e);
+    render(nav(), h("div", { class: "card error" }, h("b", {}, "The defects list couldn't be loaded."),
+      h("p", {}, /permission/.test(e.code || "")
+        ? "Firebase refused it — publish the latest firestore.rules and storage.rules, then reload."
+        : `${e.code || e.message}. Reload the page and try again.`)));
+  }
+}
+
+async function defectsInner() {
   render(nav(), h("p", { class: "muted" }, "Loading defects and photos…"));
   // Latest submitted revision per area (a reopened draft keeps showing the last certified defects).
   const latest = Object.values(latestByArea(S.subs.filter((x) => x.status === "submitted")));
