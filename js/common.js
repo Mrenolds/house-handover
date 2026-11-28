@@ -18,7 +18,7 @@ export const db = initializeFirestore(app, {
 export const storage = getStorage(app);
 
 // Shown in the page headers so you can tell which version is loaded.
-export const APP_VERSION = "1.8 (28 Nov)";
+export const APP_VERSION = "1.9 (28 Nov)";
 
 export const RESULT_LABEL = { pass: "Pass", defect: "Defect", na: "N/A" };
 

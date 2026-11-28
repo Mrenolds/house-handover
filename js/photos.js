@@ -61,15 +61,20 @@ export async function localPhotos(sid) {
   return all.filter((p) => p.sid === sid);
 }
 
+// Name of the person signed in now. Photos queued under an earlier sign-in on this
+// phone are still uploaded, credited to whoever is signed in when they go up.
+let uploaderName = null;
+export function setUploader(name) { uploaderName = name; processQueue(); }
+
 let running = false;
 export async function processQueue() {
-  if (running || !navigator.onLine || !auth.currentUser) return;
+  if (running || !navigator.onLine || !auth.currentUser || !uploaderName) return;
   running = true;
   try {
     const all = await tx("readonly", (s) => s.getAll());
     for (const p of all) {
-      if (p.uid !== auth.currentUser.uid) continue; // queued under an old session
-      const path = `photos/${p.sid}/${p.uid}_${p.id}.jpg`;
+      const uid = auth.currentUser.uid;
+      const path = `photos/${p.sid}/${uid}_${p.id}.jpg`;
       try {
         await uploadBytes(ref(storage, path), p.blob, { contentType: "image/jpeg" });
       } catch (e) {
@@ -80,7 +85,7 @@ export async function processQueue() {
       try {
         await setDoc(meta, {
           itemId: p.itemId, addendumId: p.addendumId, path,
-          by: p.uid, byName: p.byName, takenAt: new Date(p.takenAt),
+          by: uid, byName: uploaderName, takenAt: new Date(p.takenAt),
           source: p.source, uploadedAt: serverTimestamp(),
         });
       } catch (e) {

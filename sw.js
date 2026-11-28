@@ -1,6 +1,6 @@
 // Keeps the builder app usable with no signal: app files and the Firebase
 // SDK are cached; data sync is handled by Firestore's own offline cache.
-const CACHE = "handover-v9";
+const CACHE = "handover-v10";
 const APP = [
   "./", "index.html", "css/style.css",
   "js/builder.js", "js/common.js", "js/checklist.js", "js/config.js", "js/photos.js",

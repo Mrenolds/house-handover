@@ -9,7 +9,7 @@ import {
   fingerprint, statusBadge, RESULT_LABEL, itemsFor, outstandingItems, APP_VERSION,
 } from "./common.js";
 import { GROUPS, AREA_BY_ID, CHECKLIST_VERSION } from "./checklist.js";
-import { queuePhoto, onQueueChange, pendingCount, processQueue, localPhotos } from "./photos.js";
+import { queuePhoto, onQueueChange, pendingCount, processQueue, localPhotos, setUploader } from "./photos.js";
 import { ref, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-storage.js";
 import { storage } from "./common.js";
 
@@ -105,7 +105,7 @@ async function loadSession(user) {
     }, () => {});
   }
   startHome();
-  processQueue();
+  setUploader(S.session.name);
 }
 
 onAuthStateChanged(auth, async (user) => {
@@ -200,7 +200,11 @@ function homeScreen() {
       ` · ${count("partial")} part done · ${count("draft")} in progress · ${count("none")} not started`),
     h("p", { class: "muted small" }, "Open an area, check items, then submit what you've done. You can come back to a room any time to do the rest."),
     ...groups,
-    h("p", {}, h("button", { class: "link", onclick: () => { signOut(auth); } }, "Sign out"), h("span", { class: "muted small" }, `  · app v${APP_VERSION}`)));
+    h("p", {}, h("button", { class: "link", onclick: async () => {
+      const n = await pendingCount();
+      if (n && !confirm(`${n} photo${n > 1 ? "s are" : " is"} still waiting to upload. They stay on this phone and upload after you sign in again. Sign out anyway?`)) return;
+      signOut(auth);
+    } }, "Sign out"), h("span", { class: "muted small" }, `  · app v${APP_VERSION}`)));
 }
 
 // ---------- Area ----------
